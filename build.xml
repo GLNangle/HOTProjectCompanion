@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="hotprojectcompanion" default="dist" basedir=".">
+    <property name="src.dir" value="src"/>
+    <property name="resources.dir" value="resources"/>
+    <property name="build.dir" value="build/classes"/>
+    <property name="dist.dir" value="dist"/>
+    <property name="josm.jar" value="josm-tested.jar"/>
+
+    <target name="clean">
+        <delete dir="build"/>
+        <delete dir="dist"/>
+    </target>
+
+    <target name="compile">
+        <available file="${josm.jar}" property="josm.jar.present"/>
+        <fail unless="josm.jar.present"
+              message="Place josm-tested.jar in this directory or run ant -Djosm.jar=/path/to/josm-tested.jar dist"/>
+        <mkdir dir="${build.dir}"/>
+        <javac srcdir="${src.dir}" destdir="${build.dir}" release="11"
+               encoding="UTF-8" includeantruntime="false">
+            <classpath>
+                <pathelement location="${josm.jar}"/>
+            </classpath>
+        </javac>
+        <copy todir="${build.dir}">
+            <fileset dir="${resources.dir}"/>
+        </copy>
+    </target>
+
+    <target name="dist" depends="compile">
+        <mkdir dir="${dist.dir}"/>
+        <jar destfile="${dist.dir}/hotprojectcompanion.jar" basedir="${build.dir}">
+            <manifest>
+                <attribute name="Manifest-Version" value="1.0"/>
+                <attribute name="Plugin-Class" value="org.openstreetmap.josm.plugins.hotprojectcompanion.HotProjectCompanionPlugin"/>
+                <attribute name="Plugin-Description" value="Shows HOT project guidance and provides local, automatic building visual analysis inside JOSM."/>
+                <attribute name="Plugin-Version" value="0.6.2"/>
+                <attribute name="Plugin-Mainversion" value="19613"/>
+                <attribute name="Plugin-Minimum-Java-Version" value="11"/>
+                <attribute name="Plugin-Icon" value="images/dialogs/hotprojectcompanion.svg"/>
+                <attribute name="Plugin-Link" value="https://github.com/GLNangle/HOTProjectCompanion"/>
+                <attribute name="Author" value="Gemma Louise Nangle"/>
+            </manifest>
+        </jar>
+    </target>
+</project>
