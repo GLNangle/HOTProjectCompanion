@@ -29,6 +29,10 @@ public class MapView extends JComponent {
         return new ProjectionBounds();
     }
 
+    public double getDist100Pixel(boolean alwaysPositive) {
+        return 100.0;
+    }
+
     public void zoomTo(EastNorth location) {
         // Compile-only stub.
     }

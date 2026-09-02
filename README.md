@@ -8,7 +8,7 @@ Project page: https://github.com/GLNangle/HOTProjectCompanion
 
 ## Current prototype
 
-Version 0.8.1 provides:
+Version 0.9.1 provides:
 
 - a dockable **HOT Project Companion** sidebar in JOSM with independently collapsible sections whose states persist across restarts;
 - automatic project and task detection from the JOSM task-boundary layer;
@@ -20,12 +20,17 @@ Version 0.8.1 provides:
 - split-task recognition and 30-day, project-scoped recovery of source-task feedback when HOT omits it from a child task;
 - changeset comment, hashtags and source/imagery details;
 - an explicit reminder that only project-authorised imagery will be considered.
+- a local **Ask about this task** field that matches specific mapper questions against loaded
+  project instructions, imagery guidance and task feedback, shows its evidence and says when the
+  available wording does not answer the question;
 - a local, automatic **Building check** for one selected closed outline, using a captured view of the currently visible project-authorised imagery;
 - automatic measurements of roof consistency, contrast with the surroundings, visible boundary strength and directional shadow evidence;
 - footprint shape shown only as a diagnostic, never as evidence that the imagery contains a building;
 - comparison with task-instruction images when their captions clearly identify building or non-building examples;
 - a 0–100 visual match score labelled Likely building, Uncertain or Unlikely building, with supporting evidence and cautions.
 - read-only **Task building reconnaissance** inside the detected HOT boundary;
+- separate **Scan entire task** and **Scan visible area** actions, with partial-scan counts limited
+  to the displayed part of the task boundary;
 - exact counts of downloaded closed building ways classified as rectangular/orthogonal, round or other;
 - conservative estimates of possible unmapped rectangular, round and uncertain candidates from the rendered authorised imagery;
 - a review checklist with annotated thumbnails and buttons that zoom to a marked close-up of each candidate;
@@ -164,6 +169,20 @@ touches or slightly crosses the captured imagery boundary can no longer cause an
 when using Learn from buildings drawn since scan; one unusable outline is skipped without preventing
 the remaining new buildings from being considered.
 
+Version 0.9.0 adds cautious project-specific questions and visible-area reconnaissance. **Ask about
+this task** searches only the loaded project instructions, required-imagery guidance and task
+feedback, displays the supporting wording and explicitly declines to infer an answer when the match
+is incomplete. Reconnaissance now offers **Scan entire task** and **Scan visible area**. The latter
+analyses only the current viewport where it intersects the task boundary and limits both mapped
+inventory and candidate results to that subsection, giving roofs more useful rendered detail without
+requiring the complete task boundary to fit on screen.
+
+Version 0.9.1 makes the new visible-area scan scale-aware. Candidate template sizes are derived from
+JOSM's metres-per-pixel scale, preventing deep zoom from turning tiny ground variations into
+physically plausible building proposals. If local geometry learning moves or resizes a review
+marker, the adjusted location must retain comparable visual evidence; otherwise the original
+evidence-aligned marker is kept.
+
 ## Building check
 
 Load a HOT task, show only its authorised imagery, select exactly one complete closed outline and keep the whole outline visible. Press **Analyse selected outline**. JOSM captures the visible area, performs the measurements locally and displays the result without requiring a questionnaire.
@@ -172,9 +191,29 @@ The automatic score combines interior colour/texture consistency (10%), contrast
 
 The result is an explainable visual match score derived from image measurements, not a trained model or a statistical probability that the object is a building. The plugin refuses to analyse when the project provides no authorised imagery value, no imagery is visible, or any visible imagery layer cannot be matched conservatively to the project-authorised imagery. It temporarily hides visible non-imagery layers while capturing the rendered JOSM map view, restores them immediately afterwards and keeps the image in memory; nothing is transmitted or saved. Instruction images are loaded through the same restricted HTTPS loader used for their display, and the cached decoded image is reused when available.
 
+## Ask about this task
+
+After a task loads, expand **Ask about this task**, enter a specific question and press **Ask**. The
+companion compares the question locally with the project and task instructions, required-imagery
+guidance and previous task feedback. It shows up to three relevant passages with their source. For a
+yes/no question, it answers yes or no only when sufficiently specific matching wording contains an
+explicit instruction; otherwise it labels the answer unclear or not present and directs the mapper
+back to the full project instructions or project team. No question or task text is sent to an AI
+service.
+
+For example, a generic instruction to “map all buildings” is not treated as a project-specific answer
+to “Should I map buildings under construction?” unless the loaded guidance also mentions
+construction. The feature is an instruction finder rather than an authoritative general OSM advice
+service.
+
 ## Task building reconnaissance
 
-Keep the complete HOT task boundary visible and large enough to inspect, then press **Scan task for buildings**. The companion reads the locked task-boundary geometry, inventories downloaded closed ways tagged `building=*`, temporarily captures only the visible authorised imagery and proposes roof-like regions for review.
+Use **Scan entire task** after fitting the complete HOT boundary in the map view, or zoom to a useful
+subsection and press **Scan visible area**. The visible-area action clips the current viewport to the
+locked task polygon, excludes everything outside the task and inventories only downloaded buildings
+whose centres fall within that subsection. Its candidate list and mapped counts are therefore
+explicitly partial rather than totals for the whole task. Both modes temporarily capture only the
+visible authorised imagery and propose roof-like regions for review.
 
 Mapped footprints are classified as rectangular/orthogonal, round or other using their tags and geometry. Possible unmapped candidates are found using local measurements of roof consistency, contrast, image boundaries, directional shadow and whether those signals form a rectangular or circular region. Candidates overlapping mapped building footprints are removed, and overlapping detections are merged.
 
@@ -204,6 +243,11 @@ negative examples, is capped at a four-point uplift and cannot admit a proposal 
 is below 56. Neither class can rescue a proposal that fails the hard shadow, contrast, boundary,
 geometry or vegetation checks. At most 20 positive and 20 negative examples from one task contribute
 to the profile.
+
+Candidate search sizes are scale-aware. At close zoom the scanner stops testing tiny pixel patches
+that would represent implausibly small structures on the ground, while retaining larger templates
+for normal buildings. Any learned position or size adjustment is re-analysed before display so the
+highlight cannot be shifted from a scored roof-like region onto an unrelated neighbouring patch.
 
 The **Local learning** section is independent of the current HOT task. Its history stores project and
 task numbers, decision counts, last-seen HOT task status and aggregate image measurements on the

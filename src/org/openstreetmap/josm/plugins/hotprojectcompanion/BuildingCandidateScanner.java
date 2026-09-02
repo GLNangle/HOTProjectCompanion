@@ -4,6 +4,7 @@ import java.awt.Polygon;
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -29,13 +30,20 @@ final class BuildingCandidateScanner {
 
     static Result scan(BufferedImage image, Polygon taskBoundary, List<Polygon> mappedBuildings,
             LearningProfile learningProfile, GeometryLearningProfile geometryProfile) {
+        return scan(image, taskBoundary, mappedBuildings, learningProfile, geometryProfile,
+                Double.NaN);
+    }
+
+    static Result scan(BufferedImage image, Polygon taskBoundary, List<Polygon> mappedBuildings,
+            LearningProfile learningProfile, GeometryLearningProfile geometryProfile,
+            double metresPerPixel) {
         if (image == null || taskBoundary == null || taskBoundary.npoints < 3) {
             throw new IllegalArgumentException("A task image and boundary are required");
         }
         IntegralImage integral = new IntegralImage(image);
         List<Candidate> proposals = new ArrayList<>();
         int shortest = Math.min(image.getWidth(), image.getHeight());
-        int[] sizes = {14, 19, 26, 36, 50, 68};
+        int[] sizes = candidateSizes(metresPerPixel, shortest);
         for (int size : sizes) {
             if (size > shortest / 2) {
                 continue;
@@ -82,6 +90,28 @@ final class BuildingCandidateScanner {
         return new Result(retained);
     }
 
+    static int[] candidateSizes(double metresPerPixel, int shortestImageSide) {
+        if (!Double.isFinite(metresPerPixel) || metresPerPixel <= 0) {
+            return new int[] {14, 19, 26, 36, 50, 68};
+        }
+        double[] plausibleMetres = {2.5, 4, 6, 9, 13, 19, 28, 42};
+        int maximum = Math.max(14, Math.min(180, shortestImageSide / 2));
+        List<Integer> result = new ArrayList<>();
+        for (double metres : plausibleMetres) {
+            int pixels = Math.max(12, Math.min(maximum,
+                    (int) Math.round(metres / metresPerPixel)));
+            if (!result.contains(pixels)) {
+                result.add(pixels);
+            }
+        }
+        int[] sizes = new int[result.size()];
+        for (int index = 0; index < result.size(); index++) {
+            sizes[index] = result.get(index);
+        }
+        Arrays.sort(sizes);
+        return sizes;
+    }
+
     static Evidence evidenceFor(BufferedImage image, Shape shape, Rectangle bounds) {
         Assessment assessment = assess(image, shape, bounds);
         return assessment == null ? null : assessment.evidence;
@@ -116,13 +146,23 @@ final class BuildingCandidateScanner {
                     continue;
                 }
                 ScoredEvidence measurement = rectangleConfidence(integral, box);
+                Rectangle displayBox = adjustedBox(box, integral, boundary, mapped,
+                        geometryProfile, false);
+                if (!displayBox.equals(box)) {
+                    ScoredEvidence adjusted = rectangleConfidence(integral, displayBox);
+                    if (adjusted.evidence == null
+                            || adjusted.score < measurement.score - 0.06
+                            || percent(adjusted.score) < MIN_BASELINE_FOR_LEARNED_ADMISSION) {
+                        displayBox = box;
+                    } else {
+                        measurement = adjusted;
+                    }
+                }
                 double confidence = learningProfile == null ? measurement.score
                         : learningProfile.adjust(measurement.score, measurement.evidence);
                 int score = percent(confidence);
                 if (score >= MIN_CONFIDENCE
                         && percent(measurement.score) >= MIN_BASELINE_FOR_LEARNED_ADMISSION) {
-                    Rectangle displayBox = adjustedBox(box, integral, boundary, mapped,
-                            geometryProfile, false);
                     proposals.add(new Candidate(Shape.RECTANGULAR, score,
                             percent(measurement.score), displayBox, measurement.evidence));
                 }
@@ -141,13 +181,23 @@ final class BuildingCandidateScanner {
                     continue;
                 }
                 ScoredEvidence measurement = circleConfidence(integral, box);
+                Rectangle displayBox = adjustedBox(box, integral, boundary, mapped,
+                        geometryProfile, true);
+                if (!displayBox.equals(box)) {
+                    ScoredEvidence adjusted = circleConfidence(integral, displayBox);
+                    if (adjusted.evidence == null
+                            || adjusted.score < measurement.score - 0.06
+                            || percent(adjusted.score) < MIN_BASELINE_FOR_LEARNED_ADMISSION) {
+                        displayBox = box;
+                    } else {
+                        measurement = adjusted;
+                    }
+                }
                 double confidence = learningProfile == null ? measurement.score
                         : learningProfile.adjust(measurement.score, measurement.evidence);
                 int score = percent(confidence);
                 if (score >= MIN_CONFIDENCE
                         && percent(measurement.score) >= MIN_BASELINE_FOR_LEARNED_ADMISSION) {
-                    Rectangle displayBox = adjustedBox(box, integral, boundary, mapped,
-                            geometryProfile, true);
                     proposals.add(new Candidate(Shape.ROUND, score,
                             percent(measurement.score), displayBox, measurement.evidence));
                 }

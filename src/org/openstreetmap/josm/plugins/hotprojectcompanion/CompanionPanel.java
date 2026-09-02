@@ -45,6 +45,7 @@ public final class CompanionPanel extends ToggleDialog {
     private final JTextArea feedbackSummary = sectionText(tr("Previous mapper and validator comments will appear here."));
     private final JTextArea uploadSummary = sectionText(tr("Changeset comment, source and hashtags will appear here."));
     private final JPanel instructionImages = new JPanel();
+    private final TaskQuestionPanel taskQuestions = new TaskQuestionPanel();
     private final BuildingCheckPanel buildingCheck = new BuildingCheckPanel();
     private final HotTaskingManagerClient taskingManagerClient = new HotTaskingManagerClient();
     private final LearningStore learningStore = new LearningStore();
@@ -125,6 +126,9 @@ public final class CompanionPanel extends ToggleDialog {
         content.add(collapsible("what-to-map", tr("What to map"),
                 instructionSection(mapSummary, instructionImages), true));
         content.add(Box.createVerticalStrut(8));
+        content.add(collapsible("task-questions", tr("Ask about this task"),
+                taskQuestions, false));
+        content.add(Box.createVerticalStrut(8));
         content.add(collapsible("required-imagery", tr("Required imagery"),
                 section(imagerySummary), true));
         content.add(Box.createVerticalStrut(8));
@@ -202,6 +206,7 @@ public final class CompanionPanel extends ToggleDialog {
                     setSection(feedbackSummary, feedback);
                     setSection(uploadSummary, context.getUploadDetails());
                     buildingCheck.setContext(context);
+                    taskQuestions.setContext(context);
                     reconnaissance.setContext(context, reference);
                     splitFeedbackCache.remember(reference, context);
                     status.setForeground(new Color(0, 110, 45));
@@ -235,6 +240,7 @@ public final class CompanionPanel extends ToggleDialog {
         setSection(feedbackSummary, text);
         setSection(uploadSummary, text);
         buildingCheck.clearContext();
+        taskQuestions.clearContext();
         reconnaissance.clearContext();
     }
 

@@ -24,7 +24,7 @@ printf '%s\n' \
   'Manifest-Version: 1.0' \
   'Plugin-Class: org.openstreetmap.josm.plugins.hotprojectcompanion.HotProjectCompanionPlugin' \
   'Plugin-Description: Shows HOT project guidance and provides local, automatic building visual analysis inside JOSM.' \
-  'Plugin-Version: 0.8.1' \
+  'Plugin-Version: 0.9.1' \
   'Plugin-Mainversion: 19613' \
   'Plugin-Minimum-Java-Version: 11' \
   'Plugin-Icon: images/dialogs/hotprojectcompanion.svg' \

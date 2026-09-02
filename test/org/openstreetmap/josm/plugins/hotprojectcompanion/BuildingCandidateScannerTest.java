@@ -20,8 +20,20 @@ public final class BuildingCandidateScannerTest {
         rejectsVegetationPatch();
         assessesMappedOutlinesForReview();
         safelyAssessesOutlinesTouchingImageEdges();
+        usesScaleAwareCandidateSizes();
         classifiesMappedFootprints();
         System.out.println("BuildingCandidateScannerTest: all tests passed");
+    }
+
+    private static void usesScaleAwareCandidateSizes() {
+        int[] closeZoom = BuildingCandidateScanner.candidateSizes(0.10, 900);
+        require(closeZoom[0] >= 25,
+                "high zoom does not search for physically implausible micro-buildings");
+        require(closeZoom[closeZoom.length - 1] >= 160,
+                "high zoom retains larger plausible building templates");
+        int[] normalZoom = BuildingCandidateScanner.candidateSizes(0.50, 900);
+        require(normalZoom[0] == 12,
+                "normal zoom retains small rural building templates");
     }
 
     private static void detectsRectangularAndRoundRoofCandidates() {

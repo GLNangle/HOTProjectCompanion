@@ -54,7 +54,8 @@ final class TaskReconnaissancePanel extends JPanel {
     private static final long serialVersionUID = 1L;
     private static final int THUMBNAIL_SIZE = 82;
 
-    private final JButton scanButton = SidebarButtons.create(tr("Scan task for buildings"));
+    private final JButton scanButton = SidebarButtons.create(tr("Scan entire task"));
+    private final JButton scanVisibleButton = SidebarButtons.create(tr("Scan visible area"));
     private final JButton highlightToggleButton = SidebarButtons.create(tr("Hide candidate outline"));
     private final JButton mappedBuildingsToggleButton = SidebarButtons.create(tr("Hide mapped building outlines"));
     private final JButton learnMissedButton = SidebarButtons.create(
@@ -93,7 +94,14 @@ final class TaskReconnaissancePanel extends JPanel {
         add(Box.createVerticalStrut(6));
         scanButton.setAlignmentX(Component.LEFT_ALIGNMENT);
         scanButton.setEnabled(false);
-        scanButton.addActionListener(event -> scanTask());
+        scanButton.setToolTipText(tr(
+                "Scan the complete task after fitting its entire boundary in the map view."));
+        scanButton.addActionListener(event -> scanTask(ScanScope.ENTIRE_TASK));
+        scanVisibleButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+        scanVisibleButton.setEnabled(false);
+        scanVisibleButton.setToolTipText(tr(
+                "Scan only the part of the task currently visible in the JOSM map view."));
+        scanVisibleButton.addActionListener(event -> scanTask(ScanScope.VISIBLE_AREA));
         highlightToggleButton.setEnabled(false);
         highlightToggleButton.addActionListener(event -> toggleReviewHighlight());
         mappedBuildingsToggleButton.setEnabled(false);
@@ -104,6 +112,8 @@ final class TaskReconnaissancePanel extends JPanel {
                 "Use newly drawn building outlines as positive examples, including buildings the scan missed."));
         learnMissedButton.addActionListener(event -> learnFromNewBuildings());
         add(scanButton);
+        add(Box.createVerticalStrut(3));
+        add(scanVisibleButton);
         add(Box.createVerticalStrut(5));
         add(state);
         add(Box.createVerticalStrut(6));
@@ -125,8 +135,9 @@ final class TaskReconnaissancePanel extends JPanel {
         this.reference = reference;
         reset();
         scanButton.setEnabled(true);
+        scanVisibleButton.setEnabled(true);
         state.setForeground(new Color(0, 105, 45));
-        state.setText("Project loaded. Keep the whole task boundary visible, then run the scan.");
+        state.setText("Project loaded. Scan the complete task, or zoom in and scan only the visible area.");
     }
 
     void clearContext() {
@@ -135,11 +146,12 @@ final class TaskReconnaissancePanel extends JPanel {
         reference = null;
         reset();
         scanButton.setEnabled(false);
+        scanVisibleButton.setEnabled(false);
         state.setForeground(new Color(150, 65, 0));
         state.setText("Load a HOT task before scanning.");
     }
 
-    private void scanTask() {
+    private void scanTask(ScanScope scope) {
         int generation = ++scanGeneration;
         try {
             clearReviewHighlight();
@@ -147,11 +159,13 @@ final class TaskReconnaissancePanel extends JPanel {
                 throw new IllegalArgumentException("Load the HOT task context first.");
             }
             BuildingCheckPanel.verifyAuthorisedImagery(context.getAuthorisedImagery());
-            TaskCapture capture = captureTask(reference);
-            scanButton.setEnabled(false);
+            TaskCapture capture = captureTask(reference, scope);
+            setScanButtonsEnabled(false);
             checklist.removeAll();
             checklist.setVisible(false);
-            summary.setText("Scanning the task imagery…");
+            summary.setText(scope == ScanScope.VISIBLE_AREA
+                    ? "Scanning the visible part of the task imagery…"
+                    : "Scanning the complete task imagery…");
             state.setForeground(new Color(0, 105, 45));
             state.setText("The scan runs locally. Imagery is not saved or transmitted.");
 
@@ -161,7 +175,8 @@ final class TaskReconnaissancePanel extends JPanel {
                     BuildingCandidateScanner.Result candidates = BuildingCandidateScanner.scan(
                             capture.image, capture.boundary, capture.mappedPolygons,
                             learningStore.profile(),
-                            learningStore.geometryProfile(context.getAuthorisedImagery()));
+                            learningStore.geometryProfile(context.getAuthorisedImagery()),
+                            capture.metresPerPixel);
                     return new ScanResult(candidates, mappedBuildingsToReview(capture));
                 }
 
@@ -170,7 +185,7 @@ final class TaskReconnaissancePanel extends JPanel {
                     if (generation != scanGeneration) {
                         return;
                     }
-                    scanButton.setEnabled(context != null);
+                    setScanButtonsEnabled(context != null);
                     try {
                         ScanResult result = get();
                         showResult(capture, result.candidates, result.mappedToReview);
@@ -185,14 +200,19 @@ final class TaskReconnaissancePanel extends JPanel {
                 }
             }.execute();
         } catch (IllegalArgumentException exception) {
-            scanButton.setEnabled(context != null);
+            setScanButtonsEnabled(context != null);
             showError(exception.getMessage());
         } catch (LinkageError error) {
-            scanButton.setEnabled(context != null);
+            setScanButtonsEnabled(context != null);
             showError("Task reconnaissance is not compatible with this JOSM API. Update the companion and try again.");
         }
         revalidate();
         repaint();
+    }
+
+    private void setScanButtonsEnabled(boolean enabled) {
+        scanButton.setEnabled(enabled);
+        scanVisibleButton.setEnabled(enabled);
     }
 
     private void showResult(TaskCapture capture, BuildingCandidateScanner.Result result,
@@ -236,7 +256,9 @@ final class TaskReconnaissancePanel extends JPanel {
         }
         rebuildChecklist();
         state.setForeground(new Color(0, 105, 45));
-        state.setText("Scan complete. Review possible unmapped candidates and any mapped buildings with unusually weak imagery evidence.");
+        state.setText(capture.scope == ScanScope.VISIBLE_AREA
+                ? "Visible-area scan complete. Results cover only the displayed part of the task."
+                : "Complete-task scan finished. Review possible unmapped candidates and mapped buildings with unusually weak imagery evidence.");
         revalidate();
         repaint();
     }
@@ -676,7 +698,11 @@ final class TaskReconnaissancePanel extends JPanel {
         int highRectangular = result.count(BuildingCandidateScanner.Shape.RECTANGULAR, true);
         int highRound = result.count(BuildingCandidateScanner.Shape.ROUND, true);
         int uncertain = result.getCandidates().size() - highRectangular - highRound;
-        summary.setText("<html><div style='width:300px'><b>Already mapped in downloaded OSM data:</b> "
+        String scopeLabel = capture.scope == ScanScope.VISIBLE_AREA
+                ? "Visible-area scan — counts below cover only the displayed part of the task."
+                : "Complete-task scan.";
+        summary.setText("<html><div style='width:300px'><b>" + scopeLabel + "</b><br>"
+                + "<b>Already mapped in downloaded OSM data:</b> "
                 + capture.inventory.rectangular + " rectangular/orthogonal, "
                 + capture.inventory.round + " round, " + capture.inventory.other + " other.<br>"
                 + "<b>Mapped-building review:</b> "
@@ -693,7 +719,7 @@ final class TaskReconnaissancePanel extends JPanel {
                 + "<br><i>The candidate line is an estimate from the currently rendered imagery; review decisions do not edit OSM.</i></div></html>");
     }
 
-    private static TaskCapture captureTask(TaskReference reference) {
+    private static TaskCapture captureTask(TaskReference reference, ScanScope scope) {
         MapFrame map = MainApplication.getMap();
         if (map == null || map.mapView == null || map.mapView.getWidth() < 1 || map.mapView.getHeight() < 1) {
             throw new IllegalArgumentException("The JOSM map view is not available.");
@@ -703,12 +729,18 @@ final class TaskReconnaissancePanel extends JPanel {
         Polygon mapBoundary = polygon(mapView, boundaryWay);
         Rectangle bounds = mapBoundary.getBounds();
         Rectangle view = new Rectangle(0, 0, mapView.getWidth(), mapView.getHeight());
-        if (!view.contains(bounds) || bounds.width < 160 || bounds.height < 160) {
+        Rectangle crop = bounds.intersection(view);
+        if (scope == ScanScope.ENTIRE_TASK
+                && (!view.contains(bounds) || bounds.width < 160 || bounds.height < 160)) {
             throw new IllegalArgumentException("Keep the complete task boundary visible and large enough to inspect, then scan again.");
+        }
+        if (scope == ScanScope.VISIBLE_AREA
+                && (crop.width < 160 || crop.height < 160 || !taskIntersects(mapBoundary, crop))) {
+            throw new IllegalArgumentException("Zoom to a useful part of the task boundary, keep at least a moderate area visible, then scan the visible area again.");
         }
         Inventory inventory = new Inventory();
         List<Way> includedWays = new ArrayList<>();
-        List<Polygon> mappedOnMap = mappedBuildings(mapView, mapBoundary, inventory,
+        List<Polygon> mappedOnMap = mappedBuildings(mapView, mapBoundary, crop, inventory,
                 includedWays);
 
         BufferedImage mapImage = new BufferedImage(mapView.getWidth(), mapView.getHeight(),
@@ -735,7 +767,6 @@ final class TaskReconnaissancePanel extends JPanel {
             }
         }
 
-        Rectangle crop = bounds.intersection(view);
         BufferedImage image = new BufferedImage(crop.width, crop.height, BufferedImage.TYPE_INT_RGB);
         Graphics2D copy = image.createGraphics();
         try {
@@ -750,7 +781,9 @@ final class TaskReconnaissancePanel extends JPanel {
             localMapped.add(translate(mapped, -crop.x, -crop.y));
         }
         return new TaskCapture(image, localBoundary, localMapped, crop, inventory,
-                mapView.getProjectionBounds(bounds), mapBoundary, includedWays);
+                mapView.getProjectionBounds(bounds), mapView.getProjectionBounds(crop),
+                mapBoundary, includedWays, scope,
+                Math.abs(mapView.getDist100Pixel(true)) / 100.0);
     }
 
     private void reviewCandidate(int candidateNumber, BuildingCandidateScanner.Shape shape,
@@ -1124,7 +1157,8 @@ final class TaskReconnaissancePanel extends JPanel {
             return;
         }
         restoreMappedBuildingOutlines();
-        returnToOverview(displayedCapture.taskBounds);
+        returnToOverview(displayedCapture.scope == ScanScope.VISIBLE_AREA
+                ? displayedCapture.scanBounds : displayedCapture.taskBounds);
         state.setForeground(new Color(0, 90, 145));
         state.setText("Checking building outlines drawn since this scan…");
         SwingUtilities.invokeLater(this::collectNewBuildingExamples);
@@ -1132,7 +1166,7 @@ final class TaskReconnaissancePanel extends JPanel {
 
     private void collectNewBuildingExamples() {
         try {
-            TaskCapture fresh = captureTask(reference);
+            TaskCapture fresh = captureTask(reference, displayedCapture.scope);
             MapFrame map = MainApplication.getMap();
             DataSet data = MainApplication.getLayerManager().getEditDataSet();
             if (map == null || map.mapView == null || data == null) {
@@ -1235,7 +1269,7 @@ final class TaskReconnaissancePanel extends JPanel {
     }
 
     private static List<Polygon> mappedBuildings(MapView mapView, Polygon boundary,
-            Inventory inventory, List<Way> includedWays) {
+            Rectangle scanArea, Inventory inventory, List<Way> includedWays) {
         DataSet data = MainApplication.getLayerManager().getEditDataSet();
         if (data == null) {
             throw new IllegalArgumentException("No editable OSM data layer is active.");
@@ -1248,7 +1282,9 @@ final class TaskReconnaissancePanel extends JPanel {
             }
             Polygon footprint = polygon(mapView, way);
             Rectangle footprintBounds = footprint.getBounds();
-            if (!boundary.contains(footprintBounds.getCenterX(), footprintBounds.getCenterY())) {
+            double centreX = footprintBounds.getCenterX();
+            double centreY = footprintBounds.getCenterY();
+            if (!boundary.contains(centreX, centreY) || !scanArea.contains(centreX, centreY)) {
                 continue;
             }
             result.add(footprint);
@@ -1264,6 +1300,15 @@ final class TaskReconnaissancePanel extends JPanel {
             }
         }
         return result;
+    }
+
+    private static boolean taskIntersects(Polygon boundary, Rectangle area) {
+        if (boundary.intersects(area)) {
+            return true;
+        }
+        return boundary.contains(area.getCenterX(), area.getCenterY())
+                || area.contains(boundary.getBounds().getCenterX(),
+                        boundary.getBounds().getCenterY());
     }
 
     private static Polygon polygon(MapView mapView, Way way) {
@@ -1445,6 +1490,11 @@ final class TaskReconnaissancePanel extends JPanel {
         private int other;
     }
 
+    private enum ScanScope {
+        ENTIRE_TASK,
+        VISIBLE_AREA
+    }
+
     private static final class TaskCapture {
         private final BufferedImage image;
         private final Polygon boundary;
@@ -1452,22 +1502,30 @@ final class TaskReconnaissancePanel extends JPanel {
         private final Rectangle crop;
         private final Inventory inventory;
         private final ProjectionBounds taskBounds;
+        private final ProjectionBounds scanBounds;
         private final Polygon mapBoundary;
         private final Set<Way> initialBuildingWays;
         private final List<Way> mappedWays;
+        private final ScanScope scope;
+        private final double metresPerPixel;
 
         TaskCapture(BufferedImage image, Polygon boundary, List<Polygon> mappedPolygons,
                 Rectangle crop, Inventory inventory, ProjectionBounds taskBounds,
-                Polygon mapBoundary, List<Way> initialBuildingWays) {
+                ProjectionBounds scanBounds, Polygon mapBoundary,
+                List<Way> initialBuildingWays, ScanScope scope,
+                double metresPerPixel) {
             this.image = image;
             this.boundary = boundary;
             this.mappedPolygons = mappedPolygons;
             this.crop = crop;
             this.inventory = inventory;
             this.taskBounds = taskBounds;
+            this.scanBounds = scanBounds;
             this.mapBoundary = mapBoundary;
             this.initialBuildingWays = new HashSet<>(initialBuildingWays);
             this.mappedWays = new ArrayList<>(initialBuildingWays);
+            this.scope = scope;
+            this.metresPerPixel = metresPerPixel;
         }
     }
 
