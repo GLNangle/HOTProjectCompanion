@@ -10,6 +10,8 @@ public final class AllTests {
         TaskBoundaryGeometryTest.main(args);
         TaskLayerNameParserTest.main(args);
         TaskContextParserTest.main(args);
+        SplitFeedbackCacheTest.main(args);
+        MapCaptureTest.main(args);
         BuildingImageAnalyserTest.main(args);
         BuildingCandidateScannerTest.main(args);
         CandidateReviewNavigationTest.main(args);

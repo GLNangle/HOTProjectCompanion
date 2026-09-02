@@ -725,7 +725,7 @@ final class TaskReconnaissancePanel extends JPanel {
             try {
                 // Force the current imagery frame instead of reusing Swing's
                 // previous double-buffered map image.
-                mapView.printAll(graphics);
+                BuildingCheckPanel.renderFreshMapView(mapView, graphics);
             } finally {
                 graphics.dispose();
             }

@@ -8,7 +8,7 @@ Project page: https://github.com/GLNangle/HOTProjectCompanion
 
 ## Current prototype
 
-Version 0.7.3 provides:
+Version 0.7.5 provides:
 
 - a dockable **HOT Project Companion** sidebar in JOSM;
 - automatic project and task detection from the JOSM task-boundary layer;
@@ -17,7 +17,7 @@ Version 0.7.3 provides:
 - inline thumbnails for HTTPS images embedded in project or task instructions, with alt text and a full-size browser link;
 - authorised imagery with extracted offset/alignment notes and cautious alignment guidance;
 - previous task comments, invalidation warnings and recorded mapping issues;
-- split-task recognition and recovery of recently seen source-task feedback when HOT omits it from a child task;
+- split-task recognition and 30-day, project-scoped recovery of source-task feedback when HOT omits it from a child task;
 - changeset comment, hashtags and source/imagery details;
 - an explicit reminder that only project-authorised imagery will be considered.
 - a local, automatic **Building check** for one selected closed outline, using a captured view of the currently visible project-authorised imagery;
@@ -145,6 +145,15 @@ JOSM's pending map repaint to complete before capture and forces a fresh, non-do
 of the authorised imagery. The task reconnaissance capture uses the same fresh-render approach, so
 the preview and score should no longer be based on the previous map frame.
 
+Version 0.7.4 extends split-task feedback retention from 24 hours to 30 days. It retains a small
+project-scoped history and binds each child task to the first eligible source comment it inherits, so
+later work in the same project cannot silently replace that child task's feedback. The cache remains
+local to the mapper's JOSM installation and never writes comments back to HOT.
+
+Version 0.7.5 fixes an off-screen map capture crash in the Building check and Task building
+reconnaissance. It supplies the clipping rectangle required by JOSM's layer renderer and turns any
+temporary capture failure into a normal retry message instead of a JOSM exception dialogue.
+
 ## Building check
 
 Load a HOT task, show only its authorised imagery, select exactly one complete closed outline and keep the whole outline visible. Press **Analyse selected outline**. JOSM captures the visible area, performs the measurements locally and displays the result without requiring a questionnaire.
@@ -204,9 +213,9 @@ Image downloads are limited by timeout, file size, pixel count and display size.
 
 ## Split-task feedback
 
-HOT marks newly created child tasks with a `SPLIT` history event. The companion recognises that event and warns that earlier feedback may refer to the larger source boundary. If HOT does not return the original detailed comment on the child, the companion can restore feedback it saw on the source task during the previous 24 hours. Restored text is clearly labelled as inherited, and mappers are told to apply only the points relevant inside the current child boundary.
+HOT marks newly created child tasks with a `SPLIT` history event. The companion recognises that event and warns that earlier feedback may refer to the larger source boundary. If HOT does not return the original detailed comment on the child, the companion can restore feedback it saw on a source task during the previous 30 days. Restored text is clearly labelled as inherited, and mappers are told to apply only the points relevant inside the current child boundary.
 
-The cache stores only the most recently seen detailed feedback for the project on the mapper's computer. It does not send cached text anywhere or write it back to HOT.
+The cache stores up to ten recent source-feedback entries per project on the mapper's computer. Once a child task inherits an entry, it remains bound to that same source feedback for the rest of the 30-day retention period even if newer comments are later seen in the project. Feedback never crosses between projects. The cache does not send text anywhere or write it back to HOT.
 
 ## Build against JOSM
 

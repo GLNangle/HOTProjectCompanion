@@ -364,7 +364,7 @@ final class BuildingCheckPanel extends JPanel {
             try {
                 // printAll disables Swing double buffering for this render. paintAll
                 // can otherwise return the previous map frame on the first capture.
-                mapView.printAll(graphics);
+                renderFreshMapView(mapView, graphics);
             } finally {
                 graphics.dispose();
             }
@@ -388,6 +388,28 @@ final class BuildingCheckPanel extends JPanel {
             y[index] = mapOutline.ypoints[index] - crop.y;
         }
         return new CapturedOutline(result, new Polygon(x, y, mapOutline.npoints));
+    }
+
+    /**
+     * Renders the current map into an off-screen graphics context.
+     *
+     * <p>A {@link BufferedImage} graphics context has no clip by default. JOSM's
+     * layer painter requires a non-null clip rectangle, so calling
+     * {@code MapView#printAll} without setting one can make JOSM's map renderer
+     * throw a {@link NullPointerException}.</p>
+     *
+     * @param mapView active JOSM map view
+     * @param graphics target graphics context
+     * @throws IllegalArgumentException if JOSM cannot render the current frame
+     */
+    static void renderFreshMapView(MapView mapView, Graphics2D graphics) {
+        graphics.setClip(0, 0, mapView.getWidth(), mapView.getHeight());
+        try {
+            mapView.printAll(graphics);
+        } catch (RuntimeException exception) {
+            throw new IllegalArgumentException(
+                    "JOSM was still preparing the map view. Wait a moment and try again.", exception);
+        }
     }
 
     private static Polygon outlinePolygon(MapView mapView, Way way) {
