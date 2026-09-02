@@ -16,7 +16,9 @@ public final class AllTests {
         CandidateReviewDecisionsTest.main(args);
         MappedBuildingFilterTest.run();
         SidebarButtonsTest.run();
+        TaskStatusTransitionTest.run();
         LearningProfileTest.main(args);
+        GeometryLearningProfileTest.main(args);
         System.out.println("HOT Project Companion: all tests passed");
     }
 }

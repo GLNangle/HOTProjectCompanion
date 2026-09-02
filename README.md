@@ -8,7 +8,7 @@ Project page: https://github.com/GLNangle/HOTProjectCompanion
 
 ## Current prototype
 
-Version 0.6.2 provides:
+Version 0.7.3 provides:
 
 - a dockable **HOT Project Companion** sidebar in JOSM;
 - automatic project and task detection from the JOSM task-boundary layer;
@@ -110,6 +110,40 @@ Version 0.6.2 adds explicit mapped-building review decisions. **Confirm building
 positive local learning example; **Not a building** records a negative example and places the item
 in a recoverable manual-correction section without deleting or retagging OSM data. **Restore review**
 returns the item to the active list and removes its learning contribution.
+
+Version 0.7.0 moves persistent learning, task history and split-task feedback into JOSM's preferred
+plugin-prefixed preferences system. A one-time migration retains data written by v0.6.2 and earlier,
+after which JOSM preferences become the authoritative store. It also lets mappers record, in any
+combination, that a reviewed mapped building or a newly mapped candidate was moved, rotated,
+reshaped or resized. These geometry outcomes are stored separately from building/non-building
+imagery evidence so a valid but corrected building never becomes a false-negative training example.
+The plugin measures the confirmed before/after geometry and stores a bounded profile against a
+one-way key for the authorised imagery description. After at least four position or size corrections
+for that imagery, future candidate review markers receive a capped calibration: centre shifts are
+limited to 12% of the candidate dimensions and width/height scaling to 85–118%. Rotation and shape
+measurements are retained for later oriented-boundary work but do not rotate or reshape OSM data or
+candidate geometry in this release.
+
+Version 0.7.1 makes task reconnaissance substantially more conservative after field testing showed
+too many obvious non-buildings. Rectangular candidates must now show continuous edge evidence around
+all four sides rather than merely strong average edges, while round candidates require continuous
+radial edge coverage. Both shapes use a stricter roof-surface texture gate, stronger contrast and
+directional-shadow gates, a higher unlearned baseline, a smaller twelve-item shortlist and a minimum
+candidate size. The scan uses a finer grid and an additional 4:3 footprint template so these stricter
+checks do not reject a real roof simply because the search window landed a few pixels away from its
+edge. Local positive learning still cannot bypass any of these hard gates.
+
+Version 0.7.2 separates genuine validation outcomes from ordinary Tasking Manager status changes.
+The status check lists the affected project and task, treats the first public status retrieval as a
+baseline rather than a validation outcome, and only labels `VALIDATED` or `INVALIDATED` as an
+outcome. It also keeps status messages to a stable sidebar width and guards the containing viewport
+during its first mouse interaction to prevent the intermittent initial-click jump. Status checks now
+run only when requested, avoiding an asynchronous startup reflow while the sidebar is settling.
+
+Version 0.7.3 fixes an intermittent first-analysis capture mismatch. The Building check now allows
+JOSM's pending map repaint to complete before capture and forces a fresh, non-double-buffered render
+of the authorised imagery. The task reconnaissance capture uses the same fresh-render approach, so
+the preview and score should no longer be based on the previous map frame.
 
 ## Building check
 

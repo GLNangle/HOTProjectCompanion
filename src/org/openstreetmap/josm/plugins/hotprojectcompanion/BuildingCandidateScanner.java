@@ -10,10 +10,10 @@ import java.util.List;
 
 /** Conservative, dependency-free proposal scan for roof-like regions in a task image. */
 final class BuildingCandidateScanner {
-    private static final int HIGH_CONFIDENCE = 72;
-    private static final int MIN_CONFIDENCE = 58;
-    private static final int MIN_BASELINE_FOR_LEARNED_ADMISSION = 56;
-    private static final int MAX_RESULTS = 16;
+    private static final int HIGH_CONFIDENCE = 78;
+    private static final int MIN_CONFIDENCE = 61;
+    private static final int MIN_BASELINE_FOR_LEARNED_ADMISSION = 60;
+    private static final int MAX_RESULTS = 12;
 
     private BuildingCandidateScanner() {
     }
@@ -24,26 +24,40 @@ final class BuildingCandidateScanner {
 
     static Result scan(BufferedImage image, Polygon taskBoundary, List<Polygon> mappedBuildings,
             LearningProfile learningProfile) {
+        return scan(image, taskBoundary, mappedBuildings, learningProfile, null);
+    }
+
+    static Result scan(BufferedImage image, Polygon taskBoundary, List<Polygon> mappedBuildings,
+            LearningProfile learningProfile, GeometryLearningProfile geometryProfile) {
         if (image == null || taskBoundary == null || taskBoundary.npoints < 3) {
             throw new IllegalArgumentException("A task image and boundary are required");
         }
         IntegralImage integral = new IntegralImage(image);
         List<Candidate> proposals = new ArrayList<>();
         int shortest = Math.min(image.getWidth(), image.getHeight());
-        int[] sizes = {10, 14, 19, 26, 36, 50, 68};
+        int[] sizes = {14, 19, 26, 36, 50, 68};
         for (int size : sizes) {
             if (size > shortest / 2) {
                 continue;
             }
-            int stride = Math.max(3, size / 4);
+            // The hard edge-coverage gates need a reasonably close fit. A finer
+            // stride avoids missing a real roof simply because the coarse grid
+            // landed a few pixels outside its perimeter.
+            int stride = Math.max(3, size / 8);
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals, size, size, stride,
-                    learningProfile);
+                    learningProfile, geometryProfile);
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
-                    (int) Math.round(size * 1.45), size, stride, learningProfile);
+                    (int) Math.round(size * 1.33), size, stride,
+                    learningProfile, geometryProfile);
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
-                    size, (int) Math.round(size * 1.45), stride, learningProfile);
+                    size, (int) Math.round(size * 1.33), stride,
+                    learningProfile, geometryProfile);
+            scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
+                    (int) Math.round(size * 1.45), size, stride, learningProfile, geometryProfile);
+            scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
+                    size, (int) Math.round(size * 1.45), stride, learningProfile, geometryProfile);
             scanCircles(integral, taskBoundary, mappedBuildings, proposals, size, stride,
-                    learningProfile);
+                    learningProfile, geometryProfile);
         }
 
         proposals.sort(Comparator.comparingInt(Candidate::getConfidence).reversed());
@@ -92,7 +106,7 @@ final class BuildingCandidateScanner {
 
     private static void scanRectangles(IntegralImage integral, Polygon boundary,
             List<Polygon> mapped, List<Candidate> proposals, int width, int height, int stride,
-            LearningProfile learningProfile) {
+            LearningProfile learningProfile, GeometryLearningProfile geometryProfile) {
         int marginX = Math.max(3, width / 4);
         int marginY = Math.max(3, height / 4);
         for (int y = marginY; y + height + marginY < integral.height; y += stride) {
@@ -107,8 +121,10 @@ final class BuildingCandidateScanner {
                 int score = percent(confidence);
                 if (score >= MIN_CONFIDENCE
                         && percent(measurement.score) >= MIN_BASELINE_FOR_LEARNED_ADMISSION) {
+                    Rectangle displayBox = adjustedBox(box, integral, boundary, mapped,
+                            geometryProfile, false);
                     proposals.add(new Candidate(Shape.RECTANGULAR, score,
-                            percent(measurement.score), box, measurement.evidence));
+                            percent(measurement.score), displayBox, measurement.evidence));
                 }
             }
         }
@@ -116,7 +132,7 @@ final class BuildingCandidateScanner {
 
     private static void scanCircles(IntegralImage integral, Polygon boundary,
             List<Polygon> mapped, List<Candidate> proposals, int diameter, int stride,
-            LearningProfile learningProfile) {
+            LearningProfile learningProfile, GeometryLearningProfile geometryProfile) {
         int margin = Math.max(3, diameter / 4);
         for (int y = margin; y + diameter + margin < integral.height; y += stride) {
             for (int x = margin; x + diameter + margin < integral.width; x += stride) {
@@ -130,11 +146,31 @@ final class BuildingCandidateScanner {
                 int score = percent(confidence);
                 if (score >= MIN_CONFIDENCE
                         && percent(measurement.score) >= MIN_BASELINE_FOR_LEARNED_ADMISSION) {
+                    Rectangle displayBox = adjustedBox(box, integral, boundary, mapped,
+                            geometryProfile, true);
                     proposals.add(new Candidate(Shape.ROUND, score,
-                            percent(measurement.score), box, measurement.evidence));
+                            percent(measurement.score), displayBox, measurement.evidence));
                 }
             }
         }
+    }
+
+    private static Rectangle adjustedBox(Rectangle original, IntegralImage image,
+            Polygon boundary, List<Polygon> mapped, GeometryLearningProfile profile,
+            boolean keepSquare) {
+        if (profile == null || !profile.hasActiveAdjustment()) {
+            return original;
+        }
+        Rectangle adjusted = profile.adjust(original,
+                new Rectangle(0, 0, image.width, image.height));
+        if (keepSquare && adjusted.width != adjusted.height) {
+            int diameter = Math.max(4, (adjusted.width + adjusted.height) / 2);
+            adjusted = new Rectangle((int) Math.round(adjusted.getCenterX() - diameter / 2.0),
+                    (int) Math.round(adjusted.getCenterY() - diameter / 2.0), diameter, diameter)
+                    .intersection(new Rectangle(0, 0, image.width, image.height));
+        }
+        return insideBoundary(boundary, adjusted) && !overlapsMapped(mapped, adjusted)
+                ? adjusted : original;
     }
 
     private static ScoredEvidence rectangleConfidence(IntegralImage image, Rectangle box) {
@@ -148,8 +184,11 @@ final class BuildingCandidateScanner {
                 box.width + paddingX * 2, box.height + paddingY * 2);
         double insideMean = image.mean(inside);
         double insideStd = image.stdDev(inside);
+        double insideGradient = image.gradientMean(inside);
         double outerMean = image.ringMean(outer, box);
-        double consistency = clamp(1.0 - Math.max(0, insideStd - 7.0) / 47.0);
+        double colourConsistency = clamp(1.0 - Math.max(0, insideStd - 7.0) / 47.0);
+        double textureConsistency = clamp(1.0 - Math.max(0, insideGradient - 5.0) / 24.0);
+        double consistency = Math.sqrt(colourConsistency * textureConsistency);
         double contrast = clamp(Math.abs(insideMean - outerMean) / 52.0);
 
         int edge = Math.max(2, Math.min(5, Math.min(box.width, box.height) / 5));
@@ -162,18 +201,26 @@ final class BuildingCandidateScanner {
         double boundary = clamp((topEdge + bottomEdge + leftEdge + rightEdge) / 4.0 / 54.0);
         double weakestOpposingPair = Math.min((topEdge + bottomEdge) / 2.0,
                 (leftEdge + rightEdge) / 2.0);
-        double geometry = clamp(weakestOpposingPair / 42.0);
+        double strongestEdge = Math.max(Math.max(topEdge, bottomEdge),
+                Math.max(leftEdge, rightEdge));
+        double weakestEdge = Math.min(Math.min(topEdge, bottomEdge),
+                Math.min(leftEdge, rightEdge));
+        double edgeBalance = clamp(weakestEdge / Math.max(1.0, strongestEdge));
+        double edgeCoverage = rectangleEdgeCoverage(image, box);
+        double geometry = clamp(weakestOpposingPair / 46.0)
+                * Math.sqrt(edgeBalance) * Math.sqrt(edgeCoverage);
 
         double[] sides = sideMeans(image, box, paddingX, paddingY);
         double shadow = shadowCue(insideMean, sides);
         boolean vegetation = strongVegetation(image, inside);
         Evidence evidence = new Evidence(consistency, contrast, boundary, shadow, geometry);
-        if (vegetation || contrast < 0.16 || boundary < 0.30
-                || geometry < 0.28 || shadow < 0.18) {
+        if (vegetation || consistency < 0.60 || contrast < 0.22 || boundary < 0.28
+                || edgeBalance < 0.34 || edgeCoverage < 0.46
+                || geometry < 0.24 || shadow < 0.26) {
             return new ScoredEvidence(0, evidence);
         }
-        return new ScoredEvidence(clamp(consistency * 0.10 + contrast * 0.20 + boundary * 0.25
-                + shadow * 0.30 + geometry * 0.15), evidence);
+        return new ScoredEvidence(clamp(consistency * 0.08 + contrast * 0.18 + boundary * 0.24
+                + shadow * 0.32 + geometry * 0.18), evidence);
     }
 
     private static ScoredEvidence circleConfidence(IntegralImage image, Rectangle box) {
@@ -181,6 +228,7 @@ final class BuildingCandidateScanner {
         double centreY = box.getCenterY();
         double radius = Math.min(box.width, box.height) / 2.0;
         Samples inside = new Samples();
+        Samples insideTexture = new Samples();
         Samples outside = new Samples();
         Samples boundary = new Samples();
         double[] sectors = new double[8];
@@ -195,6 +243,7 @@ final class BuildingCandidateScanner {
                 double distance = Math.hypot(x - centreX, y - centreY) / radius;
                 if (distance <= 0.68) {
                     inside.add(image.value(x, y));
+                    insideTexture.add(image.gradient(x, y));
                 } else if (distance >= 0.92 && distance <= 1.10) {
                     boundary.add(image.gradient(x, y));
                 } else if (distance > 1.10 && distance <= 1.45) {
@@ -210,11 +259,16 @@ final class BuildingCandidateScanner {
         if (inside.count < 12 || outside.count < 12 || boundary.count < 8) {
             return new ScoredEvidence(0, null);
         }
-        double consistency = clamp(1.0 - Math.max(0, inside.stdDev() - 7.0) / 47.0);
+        double colourConsistency = clamp(1.0 - Math.max(0, inside.stdDev() - 7.0) / 47.0);
+        double textureConsistency = clamp(1.0
+                - Math.max(0, insideTexture.mean() - 5.0) / 24.0);
+        double consistency = Math.sqrt(colourConsistency * textureConsistency);
         double contrast = clamp(Math.abs(inside.mean() - outside.mean()) / 52.0);
         double edge = clamp(boundary.mean() / 54.0);
         double shadow = shadowCue(inside.mean(), sectorMeans(sectors, sectorCounts));
-        double circularBoundary = clamp(edge * (0.65 + contrast * 0.35));
+        double edgeCoverage = circleEdgeCoverage(image, centreX, centreY, radius);
+        double circularBoundary = clamp(edge * (0.55 + contrast * 0.25
+                + edgeCoverage * 0.20));
         Rectangle centre = new Rectangle(
                 (int) Math.round(centreX - radius * 0.68),
                 (int) Math.round(centreY - radius * 0.68),
@@ -223,12 +277,60 @@ final class BuildingCandidateScanner {
         boolean vegetation = strongVegetation(image, centre);
         Evidence evidence = new Evidence(consistency, contrast, edge, shadow,
                 circularBoundary);
-        if (vegetation || contrast < 0.16 || edge < 0.30
-                || circularBoundary < 0.24 || shadow < 0.18) {
+        if (vegetation || consistency < 0.60 || contrast < 0.22 || edge < 0.28
+                || edgeCoverage < 0.50 || circularBoundary < 0.28 || shadow < 0.26) {
             return new ScoredEvidence(0, evidence);
         }
-        return new ScoredEvidence(clamp(consistency * 0.10 + contrast * 0.20 + edge * 0.25
-                + shadow * 0.30 + circularBoundary * 0.15), evidence);
+        return new ScoredEvidence(clamp(consistency * 0.08 + contrast * 0.18 + edge * 0.24
+                + shadow * 0.32 + circularBoundary * 0.18), evidence);
+    }
+
+    private static double rectangleEdgeCoverage(IntegralImage image, Rectangle box) {
+        int samples = Math.max(8, Math.min(28, Math.max(box.width, box.height)));
+        int covered = 0;
+        int total = samples * 4;
+        for (int index = 0; index < samples; index++) {
+            double fraction = (index + 0.5) / samples;
+            int x = box.x + (int) Math.round(fraction * box.width);
+            int y = box.y + (int) Math.round(fraction * box.height);
+            if (maxGradient(image, x, box.y, false) >= 16) covered++;
+            if (maxGradient(image, x, box.y + box.height, false) >= 16) covered++;
+            if (maxGradient(image, box.x, y, true) >= 16) covered++;
+            if (maxGradient(image, box.x + box.width, y, true) >= 16) covered++;
+        }
+        return covered / (double) total;
+    }
+
+    private static double circleEdgeCoverage(IntegralImage image, double centreX,
+            double centreY, double radius) {
+        int samples = 36;
+        int covered = 0;
+        for (int index = 0; index < samples; index++) {
+            double angle = index * Math.PI * 2.0 / samples;
+            double directionX = Math.cos(angle);
+            double directionY = Math.sin(angle);
+            double strongest = 0;
+            for (int offset = -2; offset <= 2; offset++) {
+                int x = (int) Math.round(centreX + directionX * (radius + offset));
+                int y = (int) Math.round(centreY + directionY * (radius + offset));
+                strongest = Math.max(strongest, image.gradient(x, y));
+            }
+            if (strongest >= 16) {
+                covered++;
+            }
+        }
+        return covered / (double) samples;
+    }
+
+    private static double maxGradient(IntegralImage image, int x, int y,
+            boolean horizontalNormal) {
+        double strongest = 0;
+        for (int offset = -2; offset <= 2; offset++) {
+            strongest = Math.max(strongest, horizontalNormal
+                    ? image.gradient(x + offset, y)
+                    : image.gradient(x, y + offset));
+        }
+        return strongest;
     }
 
     private static double[] sideMeans(IntegralImage image, Rectangle box, int paddingX, int paddingY) {

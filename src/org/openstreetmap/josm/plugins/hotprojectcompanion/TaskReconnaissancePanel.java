@@ -17,16 +17,19 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JViewport;
@@ -157,7 +160,8 @@ final class TaskReconnaissancePanel extends JPanel {
                 protected ScanResult doInBackground() {
                     BuildingCandidateScanner.Result candidates = BuildingCandidateScanner.scan(
                             capture.image, capture.boundary, capture.mappedPolygons,
-                            learningStore.profile());
+                            learningStore.profile(),
+                            learningStore.geometryProfile(context.getAuthorisedImagery()));
                     return new ScanResult(candidates, mappedBuildingsToReview(capture));
                 }
 
@@ -290,6 +294,9 @@ final class TaskReconnaissancePanel extends JPanel {
         checkMapped.setVisible(false);
         checkMapped.addActionListener(event -> checkCandidateMapped(candidateNumber));
         details.add(checkMapped);
+        GeometryEditControls geometryEdits = createGeometryEditControls();
+        geometryEdits.panel.setVisible(false);
+        details.add(geometryEdits.panel);
         JButton restore = SidebarButtons.create(tr("Restore"));
         restore.setAlignmentX(Component.LEFT_ALIGNMENT);
         restore.setVisible(false);
@@ -297,14 +304,18 @@ final class TaskReconnaissancePanel extends JPanel {
         details.add(restore);
         row.add(details);
 
-        return new CandidateReviewItem(candidateNumber, candidate.getShape(), candidateArea,
+        CandidateReviewItem item = new CandidateReviewItem(candidateNumber, candidate.getShape(), candidateArea,
                 reviewArea, candidate.getEvidence(), row, decisionLabel, decisions, accept,
-                reject, map, checkMapped, restore);
+                reject, map, checkMapped, restore, geometryEdits);
+        geometryEdits.setSaveAction(() -> saveGeometryEdits(item.geometryEdits));
+        return item;
     }
 
     private static List<MappedBuildingConcern> mappedBuildingsToReview(TaskCapture capture) {
         List<MappedBuildingConcern> concerns = new ArrayList<>();
-        for (Polygon footprint : capture.mappedPolygons) {
+        for (int index = 0; index < capture.mappedPolygons.size(); index++) {
+            Polygon footprint = capture.mappedPolygons.get(index);
+            Way way = capture.mappedWays.get(index);
             Rectangle bounds = footprint.getBounds();
             if (bounds.width < 6 || bounds.height < 6) {
                 continue;
@@ -318,7 +329,8 @@ final class TaskReconnaissancePanel extends JPanel {
                     capture.image, shape, bounds);
             if (assessment != null && assessment.getScore() < 45) {
                 concerns.add(new MappedBuildingConcern(shape, bounds, assessment.getScore(),
-                        assessment.getEvidence()));
+                        assessment.getEvidence(), way,
+                        GeometryMeasurement.WaySnapshot.capture(way)));
             }
         }
         concerns.sort(Comparator.comparingInt(concern -> concern.score));
@@ -370,14 +382,21 @@ final class TaskReconnaissancePanel extends JPanel {
         decisions.add(Box.createHorizontalStrut(3));
         decisions.add(notBuilding);
         details.add(decisions);
+        GeometryEditControls geometryEdits = createGeometryEditControls();
+        geometryEdits.panel.setVisible(false);
+        details.add(geometryEdits.panel);
         JButton restore = SidebarButtons.create(tr("Restore review"));
         restore.setAlignmentX(Component.LEFT_ALIGNMENT);
         restore.setVisible(false);
         restore.addActionListener(event -> restoreMappedReviewDecision(number));
         details.add(restore);
         row.add(details);
-        return new MappedReviewItem(number, concern.evidence, row, decisionLabel,
-                decisions, confirm, notBuilding, restore);
+        MappedReviewItem item = new MappedReviewItem(number, concern.evidence, row, decisionLabel,
+                decisions, confirm, notBuilding, restore, geometryEdits);
+        geometryEdits.measurementProvider = () -> GeometryMeasurement.betweenWays(
+                concern.originalGeometry, concern.way);
+        geometryEdits.setSaveAction(() -> saveGeometryEdits(item.geometryEdits));
+        return item;
     }
 
     private void reviewMappedBuilding(int number, BuildingCandidateScanner.Shape shape,
@@ -412,6 +431,9 @@ final class TaskReconnaissancePanel extends JPanel {
         ViewportAnchor anchor = captureAdjacentMappedReviewAnchor(number);
         item.decision = decision;
         boolean building = decision == MappedReviewDecision.CONFIRMED_BUILDING;
+        if (!building) {
+            clearGeometryEdits(item.geometryEdits);
+        }
         item.learningRecorded = learningStore.observe(reference, item.evidence,
                 building, 1.0, 1, false);
         learningChanged.run();
@@ -442,6 +464,7 @@ final class TaskReconnaissancePanel extends JPanel {
         item.decision = MappedReviewDecision.UNREVIEWED;
         item.learningRecorded = false;
         item.reviewed = false;
+        clearGeometryEdits(item.geometryEdits);
         updateMappedReviewControls(item);
         state.setForeground(new Color(0, 105, 45));
         state.setText("Mapped building " + number + " restored to the active review list.");
@@ -455,6 +478,8 @@ final class TaskReconnaissancePanel extends JPanel {
         item.confirm.setEnabled(undecided && item.reviewed);
         item.notBuilding.setEnabled(undecided && item.reviewed);
         item.restore.setVisible(!undecided);
+        item.geometryEdits.panel.setVisible(item.reviewed
+                && item.decision != MappedReviewDecision.NOT_A_BUILDING);
         if (item.decision == MappedReviewDecision.CONFIRMED_BUILDING) {
             item.decisionLabel.setText(tr("Confirmed: building"));
             item.decisionLabel.setForeground(new Color(0, 105, 45));
@@ -698,7 +723,9 @@ final class TaskReconnaissancePanel extends JPanel {
             }
             Graphics2D graphics = mapImage.createGraphics();
             try {
-                mapView.paintAll(graphics);
+                // Force the current imagery frame instead of reusing Swing's
+                // previous double-buffered map image.
+                mapView.printAll(graphics);
             } finally {
                 graphics.dispose();
             }
@@ -793,6 +820,7 @@ final class TaskReconnaissancePanel extends JPanel {
         item.reject.setEnabled(decisionAvailable);
         item.map.setVisible(decision == CandidateReviewDecisions.Decision.ACCEPTED);
         item.checkMapped.setVisible(decision == CandidateReviewDecisions.Decision.ACCEPTED);
+        item.geometryEdits.panel.setVisible(decision == CandidateReviewDecisions.Decision.MAPPED);
         item.restore.setVisible(decision == CandidateReviewDecisions.Decision.REJECTED
                 || decision == CandidateReviewDecisions.Decision.MAPPED);
         if (decision == CandidateReviewDecisions.Decision.ACCEPTED) {
@@ -851,6 +879,8 @@ final class TaskReconnaissancePanel extends JPanel {
             return;
         }
         reviewDecisions.set(candidateNumber, CandidateReviewDecisions.Decision.MAPPED);
+        item.geometryEdits.measurement = GeometryMeasurement.candidateToWay(item.candidateArea,
+                item.shape, foundWay, map.mapView);
         item.positiveLearned = learningStore.observe(reference, item.evidence,
                 true, 1.0, 1);
         learnedBuildingWays.add(foundWay);
@@ -879,6 +909,9 @@ final class TaskReconnaissancePanel extends JPanel {
             learningStore.observe(reference, item.evidence, true, 1.0, -1);
             item.positiveLearned = false;
             learningChanged.run();
+        }
+        if (previous == CandidateReviewDecisions.Decision.MAPPED) {
+            clearGeometryEdits(item.geometryEdits);
         }
         updateCandidateControls(item);
         updateSummary();
@@ -1328,6 +1361,73 @@ final class TaskReconnaissancePanel extends JPanel {
         return label;
     }
 
+    private GeometryEditControls createGeometryEditControls() {
+        GeometryEditControls controls = new GeometryEditControls();
+        controls.panel.setLayout(new BoxLayout(controls.panel, BoxLayout.Y_AXIS));
+        controls.panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel prompt = new JLabel(tr("Geometry changed after review:"));
+        prompt.setAlignmentX(Component.LEFT_ALIGNMENT);
+        controls.panel.add(prompt);
+        JPanel choices = new JPanel();
+        choices.setLayout(new BoxLayout(choices, BoxLayout.X_AXIS));
+        choices.setAlignmentX(Component.LEFT_ALIGNMENT);
+        controls.moved = correctionBox(tr("Moved"));
+        controls.rotated = correctionBox(tr("Rotated"));
+        controls.reshaped = correctionBox(tr("Shape"));
+        controls.resized = correctionBox(tr("Size"));
+        choices.add(controls.moved);
+        choices.add(controls.rotated);
+        choices.add(controls.reshaped);
+        choices.add(controls.resized);
+        controls.panel.add(choices);
+        controls.savedLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        controls.panel.add(controls.savedLabel);
+        return controls;
+    }
+
+    private static JCheckBox correctionBox(String text) {
+        JCheckBox box = new JCheckBox(text);
+        box.setFocusable(false);
+        return box;
+    }
+
+    private void saveGeometryEdits(GeometryEditControls controls) {
+        EnumSet<GeometryEditOutcome> current = controls.selection();
+        GeometryMeasurement measurement = controls.measurement();
+        if (!current.isEmpty() && measurement == null) {
+            controls.savedLabel.setForeground(new Color(175, 40, 35));
+            controls.savedLabel.setText(tr("Finish the geometry edit before recording it"));
+            return;
+        }
+        String imagery = context == null ? "" : context.getAuthorisedImagery();
+        learningStore.replaceGeometryEdits(reference, imagery,
+                controls.recorded, controls.recordedMeasurement, current, measurement);
+        controls.recorded = EnumSet.copyOf(current);
+        controls.recordedMeasurement = measurement;
+        controls.savedLabel.setForeground(new Color(0, 105, 45));
+        controls.savedLabel.setText(current.isEmpty()
+                ? tr("No geometry correction recorded")
+                : tr("Geometry correction saved locally"));
+        learningChanged.run();
+    }
+
+    private void clearGeometryEdits(GeometryEditControls controls) {
+        String imagery = context == null ? "" : context.getAuthorisedImagery();
+        learningStore.replaceGeometryEdits(reference, imagery,
+                controls.recorded, controls.recordedMeasurement,
+                GeometryEditOutcome.none(), null);
+        controls.recorded = GeometryEditOutcome.none();
+        controls.recordedMeasurement = null;
+        controls.updating = true;
+        controls.moved.setSelected(false);
+        controls.rotated.setSelected(false);
+        controls.reshaped.setSelected(false);
+        controls.resized.setSelected(false);
+        controls.updating = false;
+        controls.savedLabel.setText(" ");
+        learningChanged.run();
+    }
+
     private static String escapeHtml(String value) {
         return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
@@ -1347,6 +1447,7 @@ final class TaskReconnaissancePanel extends JPanel {
         private final ProjectionBounds taskBounds;
         private final Polygon mapBoundary;
         private final Set<Way> initialBuildingWays;
+        private final List<Way> mappedWays;
 
         TaskCapture(BufferedImage image, Polygon boundary, List<Polygon> mappedPolygons,
                 Rectangle crop, Inventory inventory, ProjectionBounds taskBounds,
@@ -1359,6 +1460,7 @@ final class TaskReconnaissancePanel extends JPanel {
             this.taskBounds = taskBounds;
             this.mapBoundary = mapBoundary;
             this.initialBuildingWays = new HashSet<>(initialBuildingWays);
+            this.mappedWays = new ArrayList<>(initialBuildingWays);
         }
     }
 
@@ -1376,6 +1478,7 @@ final class TaskReconnaissancePanel extends JPanel {
         private final JButton map;
         private final JButton checkMapped;
         private final JButton restore;
+        private final GeometryEditControls geometryEdits;
         private boolean reviewed;
         private boolean positiveLearned;
         private boolean negativeLearned;
@@ -1384,7 +1487,8 @@ final class TaskReconnaissancePanel extends JPanel {
                 ProjectionBounds candidateArea, ProjectionBounds reviewArea,
                 BuildingCandidateScanner.Evidence evidence, JPanel row,
                 JLabel decisionLabel, JPanel decisionButtons, JButton accept, JButton reject,
-                JButton map, JButton checkMapped, JButton restore) {
+                JButton map, JButton checkMapped, JButton restore,
+                GeometryEditControls geometryEdits) {
             this.candidateNumber = candidateNumber;
             this.shape = shape;
             this.candidateArea = candidateArea;
@@ -1398,6 +1502,7 @@ final class TaskReconnaissancePanel extends JPanel {
             this.map = map;
             this.checkMapped = checkMapped;
             this.restore = restore;
+            this.geometryEdits = geometryEdits;
         }
     }
 
@@ -1416,13 +1521,14 @@ final class TaskReconnaissancePanel extends JPanel {
         private final JButton confirm;
         private final JButton notBuilding;
         private final JButton restore;
+        private final GeometryEditControls geometryEdits;
         private MappedReviewDecision decision = MappedReviewDecision.UNREVIEWED;
         private boolean reviewed;
         private boolean learningRecorded;
 
         MappedReviewItem(int number, BuildingCandidateScanner.Evidence evidence, JPanel row,
                 JLabel decisionLabel, JPanel decisionButtons, JButton confirm,
-                JButton notBuilding, JButton restore) {
+                JButton notBuilding, JButton restore, GeometryEditControls geometryEdits) {
             this.number = number;
             this.evidence = evidence;
             this.row = row;
@@ -1431,6 +1537,47 @@ final class TaskReconnaissancePanel extends JPanel {
             this.confirm = confirm;
             this.notBuilding = notBuilding;
             this.restore = restore;
+            this.geometryEdits = geometryEdits;
+        }
+    }
+
+    private static final class GeometryEditControls {
+        private final JPanel panel = new JPanel();
+        private final JLabel savedLabel = new JLabel(" ");
+        private JCheckBox moved;
+        private JCheckBox rotated;
+        private JCheckBox reshaped;
+        private JCheckBox resized;
+        private EnumSet<GeometryEditOutcome> recorded = GeometryEditOutcome.none();
+        private GeometryMeasurement measurement;
+        private Supplier<GeometryMeasurement> measurementProvider;
+        private GeometryMeasurement recordedMeasurement;
+        private boolean updating;
+
+        void setSaveAction(Runnable action) {
+            moved.addActionListener(event -> run(action));
+            rotated.addActionListener(event -> run(action));
+            reshaped.addActionListener(event -> run(action));
+            resized.addActionListener(event -> run(action));
+        }
+
+        private void run(Runnable action) {
+            if (!updating) {
+                action.run();
+            }
+        }
+
+        EnumSet<GeometryEditOutcome> selection() {
+            EnumSet<GeometryEditOutcome> result = GeometryEditOutcome.none();
+            if (moved.isSelected()) result.add(GeometryEditOutcome.MOVED);
+            if (rotated.isSelected()) result.add(GeometryEditOutcome.ROTATED);
+            if (reshaped.isSelected()) result.add(GeometryEditOutcome.RESHAPED);
+            if (resized.isSelected()) result.add(GeometryEditOutcome.RESIZED);
+            return result;
+        }
+
+        GeometryMeasurement measurement() {
+            return measurementProvider == null ? measurement : measurementProvider.get();
         }
     }
 
@@ -1439,13 +1586,18 @@ final class TaskReconnaissancePanel extends JPanel {
         private final Rectangle bounds;
         private final int score;
         private final BuildingCandidateScanner.Evidence evidence;
+        private final Way way;
+        private final GeometryMeasurement.WaySnapshot originalGeometry;
 
         MappedBuildingConcern(BuildingCandidateScanner.Shape shape, Rectangle bounds,
-                int score, BuildingCandidateScanner.Evidence evidence) {
+                int score, BuildingCandidateScanner.Evidence evidence, Way way,
+                GeometryMeasurement.WaySnapshot originalGeometry) {
             this.shape = shape;
             this.bounds = new Rectangle(bounds);
             this.score = score;
             this.evidence = evidence;
+            this.way = way;
+            this.originalGeometry = originalGeometry;
         }
     }
 

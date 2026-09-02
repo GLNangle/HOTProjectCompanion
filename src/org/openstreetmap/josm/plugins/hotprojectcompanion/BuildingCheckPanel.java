@@ -27,6 +27,7 @@ import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingWorker;
+import javax.swing.Timer;
 
 import org.openstreetmap.josm.data.osm.DataSet;
 import org.openstreetmap.josm.data.osm.Node;
@@ -45,9 +46,10 @@ final class BuildingCheckPanel extends JPanel {
     private final JLabel state = wrappingLabel("Load a HOT task, then select one closed outline.");
     private final JLabel preview = new JLabel();
     private final JLabel result = wrappingLabel("No building analysis calculated.");
-    private final JButton analyseButton = new JButton(tr("Analyse selected outline"));
+    private final JButton analyseButton = SidebarButtons.create(tr("Analyse selected outline"));
     private TaskContext context;
     private int analysisGeneration;
+    private Timer pendingCapture;
 
     BuildingCheckPanel() {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
@@ -80,6 +82,7 @@ final class BuildingCheckPanel extends JPanel {
 
     void setContext(TaskContext context) {
         analysisGeneration++;
+        cancelPendingCapture();
         this.context = context;
         resetDisplay();
         analyseButton.setEnabled(true);
@@ -89,6 +92,7 @@ final class BuildingCheckPanel extends JPanel {
 
     void clearContext() {
         analysisGeneration++;
+        cancelPendingCapture();
         context = null;
         resetDisplay();
         analyseButton.setEnabled(false);
@@ -104,15 +108,46 @@ final class BuildingCheckPanel extends JPanel {
             }
             verifyAuthorisedImagery(context.getAuthorisedImagery());
             Way way = selectedClosedWay();
+            analyseButton.setEnabled(false);
+            TaskContext activeContext = context;
+            MapFrame map = MainApplication.getMap();
+            if (map == null || map.mapView == null) {
+                throw new IllegalArgumentException("The JOSM map view is not available.");
+            }
+            map.mapView.repaint();
+            state.setForeground(new Color(0, 90, 145));
+            state.setText("Preparing a fresh render of the visible authorised imagery…");
+            pendingCapture = new Timer(250, event -> {
+                pendingCapture = null;
+                if (generation != analysisGeneration || context != activeContext) {
+                    return;
+                }
+                captureAndAnalyse(generation, way, activeContext);
+            });
+            pendingCapture.setRepeats(false);
+            pendingCapture.start();
+        } catch (IllegalArgumentException exception) {
+            analyseButton.setEnabled(context != null);
+            state.setForeground(new Color(170, 35, 35));
+            state.setText(exception.getMessage());
+        } catch (LinkageError error) {
+            analyseButton.setEnabled(context != null);
+            state.setForeground(new Color(170, 35, 35));
+            state.setText("This Building check is not compatible with this JOSM API. Update the companion and try again.");
+        }
+        revalidate();
+        repaint();
+    }
+
+    private void captureAndAnalyse(int generation, Way way, TaskContext activeContext) {
+        try {
             CapturedOutline captured = captureMapCrop(way);
             preview.setIcon(new ImageIcon(scaleToFit(captured.image, PREVIEW_WIDTH, PREVIEW_HEIGHT)));
             preview.setVisible(true);
             result.setForeground(Color.BLACK);
             result.setText("Analysing the outline and task examples…");
             state.setForeground(new Color(0, 105, 45));
-            state.setText("Outline captured. Analysis runs locally; captured imagery is not saved or sent anywhere.");
-            analyseButton.setEnabled(false);
-            TaskContext activeContext = context;
+            state.setText("Fresh imagery captured. Analysis runs locally; captured imagery is not saved or sent anywhere.");
 
             new SwingWorker<AnalysisOutcome, Void>() {
                 @Override
@@ -162,6 +197,13 @@ final class BuildingCheckPanel extends JPanel {
         }
         revalidate();
         repaint();
+    }
+
+    private void cancelPendingCapture() {
+        if (pendingCapture != null) {
+            pendingCapture.stop();
+            pendingCapture = null;
+        }
     }
 
     private void showResult(AnalysisOutcome outcome) {
@@ -320,7 +362,9 @@ final class BuildingCheckPanel extends JPanel {
             }
             Graphics2D graphics = mapImage.createGraphics();
             try {
-                mapView.paintAll(graphics);
+                // printAll disables Swing double buffering for this render. paintAll
+                // can otherwise return the previous map frame on the first capture.
+                mapView.printAll(graphics);
             } finally {
                 graphics.dispose();
             }

@@ -8,15 +8,48 @@ import java.util.prefs.Preferences;
 final class SplitFeedbackCache {
     private static final Duration MAX_AGE = Duration.ofHours(24);
     private static final int MAX_TEXT_LENGTH = 6000;
-    private static final String PROJECT = "project";
-    private static final String TASK = "task";
-    private static final String FEEDBACK = "feedback";
-    private static final String SAVED_AT = "savedAt";
+    private static final String PROJECT = PluginPreferences.PREFIX + "split-feedback.project";
+    private static final String TASK = PluginPreferences.PREFIX + "split-feedback.task";
+    private static final String FEEDBACK = PluginPreferences.PREFIX + "split-feedback.text";
+    private static final String SAVED_AT = PluginPreferences.PREFIX + "split-feedback.saved-at";
+    private static final String MIGRATED = PluginPreferences.PREFIX + "split-feedback.migrated-v1";
 
-    private final Preferences preferences;
+    private final PluginPreferences.Store preferences;
 
     SplitFeedbackCache() {
-        preferences = Preferences.userNodeForPackage(SplitFeedbackCache.class).node("split-feedback");
+        this(PluginPreferences.josm(),
+                Preferences.userNodeForPackage(SplitFeedbackCache.class).node("split-feedback"));
+    }
+
+    SplitFeedbackCache(PluginPreferences.Store preferences) {
+        this(preferences, null);
+    }
+
+    private SplitFeedbackCache(PluginPreferences.Store preferences, Preferences legacy) {
+        this.preferences = preferences;
+        migrateLegacyPreferences(legacy);
+    }
+
+    private void migrateLegacyPreferences(Preferences legacy) {
+        if (legacy == null || "true".equals(preferences.get(MIGRATED, ""))) {
+            return;
+        }
+        try {
+            copyIfMissing(PROJECT, Long.toString(legacy.getLong("project", -1)));
+            copyIfMissing(TASK, Long.toString(legacy.getLong("task", -1)));
+            copyIfMissing(FEEDBACK, legacy.get("feedback", ""));
+            copyIfMissing(SAVED_AT, Long.toString(legacy.getLong("savedAt", 0)));
+            preferences.put(MIGRATED, "true");
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ignored) {
+            // The live task still works when the former Java store is unavailable.
+        }
+    }
+
+    private void copyIfMissing(String key, String legacyValue) {
+        if (preferences.get(key, "").isEmpty() && legacyValue != null && !legacyValue.isEmpty()
+                && !"-1".equals(legacyValue) && !"0".equals(legacyValue)) {
+            preferences.put(key, legacyValue);
+        }
     }
 
     void remember(TaskReference reference, TaskContext context) {
@@ -29,10 +62,10 @@ final class SplitFeedbackCache {
             feedback = feedback.substring(0, MAX_TEXT_LENGTH) + "\n\n[Long feedback shortened by the companion.]";
         }
         try {
-            preferences.putLong(PROJECT, reference.getProjectId());
-            preferences.putLong(TASK, reference.getTaskId());
+            preferences.put(PROJECT, Long.toString(reference.getProjectId()));
+            preferences.put(TASK, Long.toString(reference.getTaskId()));
             preferences.put(FEEDBACK, feedback);
-            preferences.putLong(SAVED_AT, Instant.now().toEpochMilli());
+            preferences.put(SAVED_AT, Long.toString(Instant.now().toEpochMilli()));
         } catch (IllegalArgumentException | IllegalStateException | SecurityException ignored) {
             // The live task still works when local preferences are unavailable.
         }
@@ -40,9 +73,9 @@ final class SplitFeedbackCache {
 
     Entry recentForSplitChild(TaskReference child) {
         try {
-            long project = preferences.getLong(PROJECT, -1);
-            long task = preferences.getLong(TASK, -1);
-            long savedAt = preferences.getLong(SAVED_AT, 0);
+            long project = parseLong(preferences.get(PROJECT, ""), -1);
+            long task = parseLong(preferences.get(TASK, ""), -1);
+            long savedAt = parseLong(preferences.get(SAVED_AT, ""), 0);
             String feedback = preferences.get(FEEDBACK, "");
             boolean fresh = savedAt > 0
                     && Duration.between(Instant.ofEpochMilli(savedAt), Instant.now()).compareTo(MAX_AGE) <= 0;
@@ -54,6 +87,14 @@ final class SplitFeedbackCache {
             // Treat unavailable preferences as an empty cache.
         }
         return null;
+    }
+
+    private static long parseLong(String value, long defaultValue) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException exception) {
+            return defaultValue;
+        }
     }
 
     static String appendInherited(String currentFeedback, Entry entry) {

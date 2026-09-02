@@ -1,5 +1,8 @@
 package org.openstreetmap.josm.plugins.hotprojectcompanion;
 
+import java.util.HashMap;
+import java.util.EnumSet;
+import java.util.Map;
 import java.util.prefs.Preferences;
 
 public final class LearningProfileTest {
@@ -12,6 +15,8 @@ public final class LearningProfileTest {
         profileRoundTrips();
         storePersistsAndCapsOneTask();
         existingMappedReviewLearnsWithoutAwaitingValidation();
+        legacyLearningMigratesIntoJosmPreferences();
+        geometryEditsRoundTripAndCanBeReversed();
         System.out.println("LearningProfileTest: all tests passed");
     }
 
@@ -61,52 +66,107 @@ public final class LearningProfileTest {
     }
 
     private static void storePersistsAndCapsOneTask() {
-        String nodeName = "test-" + System.nanoTime();
-        Preferences preferences = Preferences.userRoot().node(
-                "/org/openstreetmap/josm/plugins/hotprojectcompanion/" + nodeName);
-        try {
-            LearningStore store = new LearningStore(preferences);
-            TaskReference reference = TaskReference.forHotTask(12, 34);
-            BuildingCandidateScanner.Evidence evidence = evidence(0.7, 0.7, 0.7, 0.7, 0.7);
-            int recorded = 0;
-            for (int index = 0; index < 25; index++) {
-                if (store.observe(reference, evidence, true, 1.0, 1)) {
-                    recorded++;
-                }
+        MemoryPreferences preferences = new MemoryPreferences();
+        LearningStore store = new LearningStore(preferences);
+        TaskReference reference = TaskReference.forHotTask(12, 34);
+        BuildingCandidateScanner.Evidence evidence = evidence(0.7, 0.7, 0.7, 0.7, 0.7);
+        int recorded = 0;
+        for (int index = 0; index < 25; index++) {
+            if (store.observe(reference, evidence, true, 1.0, 1)) {
+                recorded++;
             }
-            require(recorded == 20, "single-task positive examples are capped");
-            LearningStore restored = new LearningStore(preferences);
-            require(restored.profile().getPositiveCount() == 20, "store profile persisted");
-            require(restored.records().size() == 1, "task history persisted");
+        }
+        require(recorded == 20, "single-task positive examples are capped");
+        LearningStore restored = new LearningStore(preferences);
+        require(restored.profile().getPositiveCount() == 20, "store profile persisted");
+        require(restored.records().size() == 1, "task history persisted");
+    }
+
+    private static void existingMappedReviewLearnsWithoutAwaitingValidation() {
+        MemoryPreferences preferences = new MemoryPreferences();
+        LearningStore store = new LearningStore(preferences);
+        TaskReference reference = TaskReference.forHotTask(56, 78);
+        BuildingCandidateScanner.Evidence evidence = evidence(0.4, 0.3, 0.4, 0.2, 0.3);
+        require(store.observe(reference, evidence, true, 1.0, 1, false),
+                "confirmed existing building is recorded");
+        require("LOCAL".equals(store.records().get(0).getStatus()),
+                "reviewing existing mapped data does not claim new work awaits validation");
+        require(store.observe(reference, evidence, true, 1.0, -1, false),
+                "restoring the review removes its learning observation");
+    }
+
+    private static void legacyLearningMigratesIntoJosmPreferences() {
+        Preferences legacy = Preferences.userRoot().node(
+                "/org/openstreetmap/josm/plugins/hotprojectcompanion/test-migration-"
+                        + System.nanoTime());
+        try {
+            LearningProfile oldProfile = new LearningProfile();
+            oldProfile.observe(evidence(0.8, 0.7, 0.7, 0.8, 0.7), true, 1.0);
+            legacy.put("profile-v1", oldProfile.encode());
+            legacy.put("history-v1", "12:34|AWAITING VALIDATION|1|0|123456");
+
+            MemoryPreferences josm = new MemoryPreferences();
+            LearningStore migrated = new LearningStore(josm, legacy);
+            require(migrated.profile().getPositiveCount() == 1,
+                    "legacy learning profile migrates into JOSM preferences");
+            require(migrated.records().size() == 1,
+                    "legacy task history migrates into JOSM preferences");
+
+            legacy.put("profile-v1", "damaged after migration");
+            LearningStore reopened = new LearningStore(josm, legacy);
+            require(reopened.profile().getPositiveCount() == 1,
+                    "migration runs once and JOSM preferences remain authoritative");
         } finally {
             try {
-                preferences.removeNode();
+                legacy.removeNode();
             } catch (Exception exception) {
-                throw new AssertionError("temporary learning preferences removed", exception);
+                throw new AssertionError("temporary migration preferences removed", exception);
             }
         }
     }
 
-    private static void existingMappedReviewLearnsWithoutAwaitingValidation() {
-        String nodeName = "test-mapped-review-" + System.nanoTime();
-        Preferences preferences = Preferences.userRoot().node(
-                "/org/openstreetmap/josm/plugins/hotprojectcompanion/" + nodeName);
-        try {
-            LearningStore store = new LearningStore(preferences);
-            TaskReference reference = TaskReference.forHotTask(56, 78);
-            BuildingCandidateScanner.Evidence evidence = evidence(0.4, 0.3, 0.4, 0.2, 0.3);
-            require(store.observe(reference, evidence, true, 1.0, 1, false),
-                    "confirmed existing building is recorded");
-            require("LOCAL".equals(store.records().get(0).getStatus()),
-                    "reviewing existing mapped data does not claim new work awaits validation");
-            require(store.observe(reference, evidence, true, 1.0, -1, false),
-                    "restoring the review removes its learning observation");
-        } finally {
-            try {
-                preferences.removeNode();
-            } catch (Exception exception) {
-                throw new AssertionError("temporary mapped-review preferences removed", exception);
-            }
+    private static void geometryEditsRoundTripAndCanBeReversed() {
+        MemoryPreferences preferences = new MemoryPreferences();
+        TaskReference reference = TaskReference.forHotTask(90, 12);
+        LearningStore store = new LearningStore(preferences);
+        EnumSet<GeometryEditOutcome> edits = EnumSet.of(
+                GeometryEditOutcome.MOVED, GeometryEditOutcome.RESIZED);
+        GeometryMeasurement measurement = new GeometryMeasurement(0.08, -0.04,
+                1.12, 0.95, 0.1, 0.3);
+        store.replaceGeometryEdits(reference, "EsriWorldImagery",
+                GeometryEditOutcome.none(), null, edits, measurement);
+
+        LearningStore restored = new LearningStore(preferences);
+        LearningStore.TaskRecord record = restored.records().get(0);
+        require(record.getMoved() == 1 && record.getResized() == 1,
+                "geometry edit outcomes persist independently of imagery labels");
+        require(record.getRotated() == 0 && record.getReshaped() == 0,
+                "unselected geometry outcomes are not recorded");
+        require(restored.geometryProfile("EsriWorldImagery").getMovedCount() == 1,
+                "geometry measurements persist against the authorised imagery");
+
+        restored.replaceGeometryEdits(reference, "EsriWorldImagery", edits, measurement,
+                GeometryEditOutcome.none(), null);
+        LearningStore.TaskRecord reversed = new LearningStore(preferences).records().get(0);
+        require(reversed.getMoved() == 0 && reversed.getResized() == 0,
+                "restoring a review reverses its geometry outcomes");
+        require(reversed.getMoved() == 0
+                        && new LearningStore(preferences).geometryProfile("EsriWorldImagery")
+                                .getMovedCount() == 0,
+                "restoring a review reverses its imagery-specific geometry measurement");
+    }
+
+    private static final class MemoryPreferences implements PluginPreferences.Store {
+        private final Map<String, String> values = new HashMap<>();
+
+        @Override
+        public String get(String key, String defaultValue) {
+            return values.getOrDefault(key, defaultValue);
+        }
+
+        @Override
+        public void put(String key, String value) {
+            values.put(key, value);
         }
     }
 

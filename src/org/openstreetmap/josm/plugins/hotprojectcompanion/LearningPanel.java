@@ -8,6 +8,7 @@ import java.awt.Dimension;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
@@ -20,7 +21,6 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
-import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 
 /** Persistent learning summary and task-status synchronisation controls. */
@@ -32,9 +32,9 @@ final class LearningPanel extends JPanel {
     private final LearningStore store;
     private final HotTaskingManagerClient client;
     private final JLabel summary = label("");
-    private final JLabel state = label("Learning stays on this computer.");
+    private final JLabel state = wrappingLabel("Learning stays on this computer.");
     private final JButton historyButton = SidebarButtons.create(tr("Learning history…"));
-    private final JButton syncButton = SidebarButtons.create(tr("Sync validation outcomes"));
+    private final JButton syncButton = SidebarButtons.create(tr("Check task statuses"));
 
     LearningPanel(LearningStore store, HotTaskingManagerClient client) {
         this.store = store;
@@ -57,17 +57,17 @@ final class LearningPanel extends JPanel {
         state.setForeground(new Color(90, 90, 90));
         add(state);
         refresh();
-        if (!store.recordsForSync().isEmpty()) {
-            SwingUtilities.invokeLater(this::syncStatuses);
-        }
     }
 
     void refresh() {
         LearningProfile profile = store.profile();
+        int[] geometry = store.geometryTotals();
         summary.setText("<html><div style='width:300px'><b>"
                 + profile.getPositiveCount() + " mapped building examples</b> · "
                 + profile.getNegativeCount() + " rejected examples<br>"
-                + store.awaitingCount() + " previous task(s) awaiting a validation outcome"
+                + geometry[0] + " moved · " + geometry[1] + " rotated · "
+                + geometry[2] + " reshaped · " + geometry[3] + " resized<br>"
+                + store.awaitingCount() + " saved task(s) currently marked as awaiting validation"
                 + "</div></html>");
         syncButton.setEnabled(!store.recordsForSync().isEmpty());
     }
@@ -75,49 +75,40 @@ final class LearningPanel extends JPanel {
     private void syncStatuses() {
         List<LearningStore.TaskRecord> records = store.recordsForSync();
         if (records.isEmpty()) {
-            state.setText("No learning tasks have been recorded yet.");
+            setState("No recent learning tasks are available to check.", new Color(90, 90, 90));
             return;
         }
         syncButton.setEnabled(false);
-        state.setForeground(new Color(0, 90, 145));
-        state.setText("Checking saved task numbers in the Tasking Manager…");
-        new SwingWorker<int[], Void>() {
+        setState("Checking saved task numbers in the Tasking Manager…", new Color(0, 90, 145));
+        new SwingWorker<SyncReport, Void>() {
             @Override
-            protected int[] doInBackground() {
-                int updated = 0;
+            protected SyncReport doInBackground() {
+                List<TaskStatusTransition> transitions = new ArrayList<>();
                 int failed = 0;
                 for (LearningStore.TaskRecord record : records) {
                     try {
                         TaskReference reference = TaskReference.forHotTask(record.getProject(),
                                 record.getTask());
                         String status = client.loadTaskStatus(reference);
-                        if (!status.equalsIgnoreCase(record.getStatus())) {
-                            updated++;
+                        TaskStatusTransition transition = TaskStatusTransition.between(record, status);
+                        if (transition.getKind() != TaskStatusTransition.Kind.UNCHANGED) {
+                            transitions.add(transition);
                         }
                         store.setTaskStatus(reference, status);
                     } catch (Exception exception) {
                         failed++;
                     }
                 }
-                return new int[] {updated, failed};
+                return new SyncReport(records.size(), failed, transitions);
             }
 
             @Override
             protected void done() {
                 syncButton.setEnabled(true);
                 try {
-                    int[] result = get();
-                    int updated = result[0];
-                    int failed = result[1];
+                    SyncReport result = get();
                     refresh();
-                    state.setForeground(failed == 0 ? new Color(0, 105, 45)
-                            : new Color(150, 65, 0));
-                    state.setText(failed > 0
-                            ? updated + " update(s) found; " + failed
-                                    + " task(s) could not be checked."
-                            : updated == 0
-                            ? "Task statuses are up to date."
-                            : updated + " validation outcome/status update(s) found.");
+                    showSyncReport(result);
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
                     showSyncError("The status check was interrupted.");
@@ -132,16 +123,82 @@ final class LearningPanel extends JPanel {
     }
 
     private void showSyncError(String message) {
-        state.setForeground(new Color(170, 35, 35));
-        state.setText("Could not sync validation outcomes: " + escapeHtml(message));
+        setState("Could not check task statuses: " + message, new Color(170, 35, 35));
         refresh();
     }
 
+    private void showSyncReport(SyncReport report) {
+        int validationOutcomes = report.count(TaskStatusTransition.Kind.VALIDATION_OUTCOME);
+        int statusChanges = report.count(TaskStatusTransition.Kind.STATUS_CHANGE);
+        int initialStatuses = report.count(TaskStatusTransition.Kind.INITIAL_STATUS);
+        StringBuilder text = new StringBuilder();
+        if (validationOutcomes == 0) {
+            text.append("<b>No new validation outcomes were found.</b>");
+        } else {
+            text.append("<b>").append(validationOutcomes)
+                    .append(validationOutcomes == 1
+                            ? " validation outcome found:</b>" : " validation outcomes found:</b>");
+            appendTransitions(text, report.transitions,
+                    TaskStatusTransition.Kind.VALIDATION_OUTCOME, true);
+        }
+        if (statusChanges > 0) {
+            text.append("<br><b>Other status changes:</b>");
+            appendTransitions(text, report.transitions,
+                    TaskStatusTransition.Kind.STATUS_CHANGE, true);
+        }
+        if (initialStatuses > 0) {
+            text.append("<br><b>Initial public status recorded:</b>");
+            appendTransitions(text, report.transitions,
+                    TaskStatusTransition.Kind.INITIAL_STATUS, false);
+        }
+        int checked = report.checked - report.failed;
+        text.append("<br>Checked ").append(checked).append(" task")
+                .append(checked == 1 ? "" : "s").append(" using public Tasking Manager data.");
+        if (report.failed > 0) {
+            text.append(" ").append(report.failed).append(" task")
+                    .append(report.failed == 1 ? " could" : "s could").append(" not be checked.");
+        }
+        setStateHtml(text.toString(), report.failed == 0
+                ? new Color(0, 105, 45) : new Color(150, 65, 0));
+    }
+
+    private static void appendTransitions(StringBuilder text,
+            List<TaskStatusTransition> transitions, TaskStatusTransition.Kind kind,
+            boolean showPrevious) {
+        for (TaskStatusTransition transition : transitions) {
+            if (transition.getKind() != kind) {
+                continue;
+            }
+            text.append("<br>Project ").append(transition.getProject())
+                    .append(" · Task ").append(transition.getTask()).append(": ");
+            if (showPrevious) {
+                text.append(escapeHtml(TaskStatusTransition.display(transition.getPrevious())))
+                        .append(" → ");
+            }
+            text.append(escapeHtml(TaskStatusTransition.display(transition.getCurrent())));
+        }
+    }
+
+    private void setState(String text, Color colour) {
+        setStateHtml(escapeHtml(text), colour);
+    }
+
+    private void setStateHtml(String html, Color colour) {
+        state.setForeground(colour);
+        state.setText("<html><div style='width:300px'>" + html + "</div></html>");
+    }
+
     private void showHistory() {
+        int[] geometry = store.geometryTotals();
         StringBuilder text = new StringBuilder();
         text.append("LOCAL LEARNING\n\n")
                 .append("Mapped building examples: ").append(store.profile().getPositiveCount())
                 .append("\nRejected examples: ").append(store.profile().getNegativeCount())
+                .append("\nGeometry corrections: ")
+                .append(geometry[0]).append(" moved · ")
+                .append(geometry[1]).append(" rotated · ")
+                .append(geometry[2]).append(" reshaped · ")
+                .append(geometry[3]).append(" resized")
                 .append("\n\nTASK HISTORY\n");
         List<LearningStore.TaskRecord> records = store.records();
         if (records.isEmpty()) {
@@ -152,7 +209,12 @@ final class LearningPanel extends JPanel {
                         .append(record.getTask()).append("\n  ")
                         .append(record.getStatus()).append(" · ")
                         .append(record.getMapped()).append(" mapped · ")
-                        .append(record.getRejected()).append(" rejected · ")
+                        .append(record.getRejected()).append(" rejected")
+                        .append("\n  Geometry edits: ")
+                        .append(record.getMoved()).append(" moved · ")
+                        .append(record.getRotated()).append(" rotated · ")
+                        .append(record.getReshaped()).append(" reshaped · ")
+                        .append(record.getResized()).append(" resized · ")
                         .append(DATE.format(Instant.ofEpochSecond(record.getUpdated())))
                         .append("\n");
             }
@@ -178,6 +240,35 @@ final class LearningPanel extends JPanel {
         JLabel label = new JLabel(text);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
+    }
+
+    private static JLabel wrappingLabel(String text) {
+        JLabel label = new JLabel("<html><div style='width:300px'>" + escapeHtml(text)
+                + "</div></html>");
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return label;
+    }
+
+    private static final class SyncReport {
+        private final int checked;
+        private final int failed;
+        private final List<TaskStatusTransition> transitions;
+
+        SyncReport(int checked, int failed, List<TaskStatusTransition> transitions) {
+            this.checked = checked;
+            this.failed = failed;
+            this.transitions = transitions;
+        }
+
+        int count(TaskStatusTransition.Kind kind) {
+            int count = 0;
+            for (TaskStatusTransition transition : transitions) {
+                if (transition.getKind() == kind) {
+                    count++;
+                }
+            }
+            return count;
+        }
     }
 
     private static String escapeHtml(String value) {

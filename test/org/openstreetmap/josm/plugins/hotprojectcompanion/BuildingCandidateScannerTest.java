@@ -15,6 +15,8 @@ public final class BuildingCandidateScannerTest {
         excludesAlreadyMappedCandidate();
         doesNotInventCandidatesOnFeaturelessImagery();
         rejectsUnshadowedGroundPatch();
+        rejectsShadowedTexturedGroundPatch();
+        rejectsRoadBandWithDarkEdge();
         rejectsVegetationPatch();
         assessesMappedOutlinesForReview();
         classifiesMappedFootprints();
@@ -77,6 +79,50 @@ public final class BuildingCandidateScannerTest {
                 Collections.emptyList());
         require(result.getCandidates().isEmpty(),
                 "a strongly green vegetation patch is rejected");
+    }
+
+    private static void rejectsShadowedTexturedGroundPatch() {
+        BufferedImage image = flatPatch(new Color(116, 112, 96),
+                new Color(178, 166, 132), false);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setColor(new Color(64, 61, 50));
+            graphics.fillRect(108, 122, 58, 10);
+            for (int y = 82; y < 121; y += 4) {
+                for (int x = 102; x < 157; x += 5) {
+                    int shade = ((x + y) / 3) % 2 == 0 ? 115 : 225;
+                    graphics.setColor(new Color(shade, shade - 7, shade - 18));
+                    graphics.fillRect(x, y, 2, 2);
+                }
+            }
+        } finally {
+            graphics.dispose();
+        }
+        BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
+                rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
+                Collections.emptyList());
+        require(result.getCandidates().isEmpty(),
+                "a textured bare patch with a dark side is rejected");
+    }
+
+    private static void rejectsRoadBandWithDarkEdge() {
+        BufferedImage image = new BufferedImage(260, 220, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setColor(new Color(116, 112, 96));
+            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+            graphics.setColor(new Color(62, 59, 49));
+            graphics.fillRect(0, 126, image.getWidth(), 9);
+            graphics.setColor(new Color(182, 169, 137));
+            graphics.fillRect(0, 88, image.getWidth(), 38);
+        } finally {
+            graphics.dispose();
+        }
+        BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
+                rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
+                Collections.emptyList());
+        require(result.getCandidates().isEmpty(),
+                "a road-like band with two long edges is rejected");
     }
 
     private static void assessesMappedOutlinesForReview() {
