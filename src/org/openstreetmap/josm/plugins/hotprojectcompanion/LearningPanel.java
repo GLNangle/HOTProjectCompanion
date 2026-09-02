@@ -41,7 +41,7 @@ final class LearningPanel extends JPanel {
         this.client = client;
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setAlignmentX(Component.LEFT_ALIGNMENT);
-        setBorder(BorderFactory.createTitledBorder(tr("Local learning")));
+        setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
         add(summary);
         add(Box.createVerticalStrut(4));
         JPanel buttons = new JPanel();

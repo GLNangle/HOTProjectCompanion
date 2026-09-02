@@ -585,8 +585,17 @@ final class BuildingCandidateScanner {
             blueSum = integral(blues, false);
         }
 
-        double value(int x, int y) { return values[y * width + x]; }
-        double gradient(int x, int y) { return gradients[y * width + x]; }
+        double value(int x, int y) {
+            int safeX = Math.max(0, Math.min(width - 1, x));
+            int safeY = Math.max(0, Math.min(height - 1, y));
+            return values[safeY * width + safeX];
+        }
+
+        double gradient(int x, int y) {
+            int safeX = Math.max(0, Math.min(width - 1, x));
+            int safeY = Math.max(0, Math.min(height - 1, y));
+            return gradients[safeY * width + safeX];
+        }
 
         double redMean(Rectangle rectangle) { return channelMean(redSum, rectangle); }
         double greenMean(Rectangle rectangle) { return channelMean(greenSum, rectangle); }

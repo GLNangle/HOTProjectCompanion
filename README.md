@@ -8,9 +8,9 @@ Project page: https://github.com/GLNangle/HOTProjectCompanion
 
 ## Current prototype
 
-Version 0.7.5 provides:
+Version 0.8.1 provides:
 
-- a dockable **HOT Project Companion** sidebar in JOSM;
+- a dockable **HOT Project Companion** sidebar in JOSM with independently collapsible sections whose states persist across restarts;
 - automatic project and task detection from the JOSM task-boundary layer;
 - separate project and task fields as a manual fallback, with no URL required;
 - live read-only project instructions and per-task instructions;
@@ -153,6 +153,16 @@ local to the mapper's JOSM installation and never writes comments back to HOT.
 Version 0.7.5 fixes an off-screen map capture crash in the Building check and Task building
 reconnaissance. It supplies the clipping rectangle required by JOSM's layer renderer and turns any
 temporary capture failure into a normal retry message instead of a JOSM exception dialogue.
+
+Version 0.8.0 makes all seven major sidebar sections independently collapsible and remembers each
+choice in JOSM preferences. On first use, What to map, Required imagery and Previous feedback start
+open; the optional learning, analysis, reconnaissance and upload sections start collapsed. Hidden
+sections continue receiving live updates and show the latest information when reopened.
+
+Version 0.8.1 safely clamps visual-evidence sampling at every image edge. A newly drawn outline that
+touches or slightly crosses the captured imagery boundary can no longer cause an array-bounds error
+when using Learn from buildings drawn since scan; one unusable outline is skipped without preventing
+the remaining new buildings from being considered.
 
 ## Building check
 

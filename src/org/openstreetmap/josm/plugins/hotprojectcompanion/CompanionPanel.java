@@ -120,19 +120,24 @@ public final class CompanionPanel extends ToggleDialog {
         fallback.setBorder(BorderFactory.createTitledBorder(tr("Manual fallback")));
         content.add(fallback);
         content.add(Box.createVerticalStrut(8));
-        content.add(learning);
+        content.add(collapsible("learning", tr("Local learning"), learning, false));
         content.add(Box.createVerticalStrut(8));
-        content.add(instructionSection(tr("What to map"), mapSummary, instructionImages));
+        content.add(collapsible("what-to-map", tr("What to map"),
+                instructionSection(mapSummary, instructionImages), true));
         content.add(Box.createVerticalStrut(8));
-        content.add(section(tr("Required imagery"), imagerySummary));
+        content.add(collapsible("required-imagery", tr("Required imagery"),
+                section(imagerySummary), true));
         content.add(Box.createVerticalStrut(8));
-        content.add(section(tr("Previous feedback"), feedbackSummary));
+        content.add(collapsible("previous-feedback", tr("Previous feedback"),
+                section(feedbackSummary), true));
         content.add(Box.createVerticalStrut(8));
-        content.add(buildingCheck);
+        content.add(collapsible("building-check", tr("Building check"), buildingCheck, false));
         content.add(Box.createVerticalStrut(8));
-        content.add(reconnaissance);
+        content.add(collapsible("reconnaissance", tr("Task building reconnaissance"),
+                reconnaissance, false));
         content.add(Box.createVerticalStrut(8));
-        content.add(section(tr("Upload details"), uploadSummary));
+        content.add(collapsible("upload-details", tr("Upload details"),
+                section(uploadSummary), false));
         content.add(Box.createVerticalGlue());
         return content;
     }
@@ -250,19 +255,24 @@ public final class CompanionPanel extends ToggleDialog {
         }
     }
 
-    private static JPanel section(String title, JTextArea text) {
+    private static CollapsibleSection collapsible(String id, String title, JPanel body,
+            boolean expandedByDefault) {
+        return new CollapsibleSection(id, title, body, expandedByDefault);
+    }
+
+    private static JPanel section(JTextArea text) {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        panel.setBorder(BorderFactory.createTitledBorder(title));
+        panel.setBorder(BorderFactory.createEmptyBorder(0, 3, 3, 3));
         panel.add(new JScrollPane(text), BorderLayout.CENTER);
         panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 125));
         return panel;
     }
 
-    private static JPanel instructionSection(String title, JTextArea text, JPanel images) {
+    private static JPanel instructionSection(JTextArea text, JPanel images) {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        panel.setBorder(BorderFactory.createTitledBorder(title));
+        panel.setBorder(BorderFactory.createEmptyBorder(0, 3, 3, 3));
 
         JPanel body = new JPanel();
         body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));

@@ -87,7 +87,7 @@ final class TaskReconnaissancePanel extends JPanel {
         this.learningChanged = learningChanged;
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setAlignmentX(Component.LEFT_ALIGNMENT);
-        setBorder(BorderFactory.createTitledBorder(tr("Task building reconnaissance")));
+        setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
 
         add(wrappingLabel("Count downloaded mapped buildings and estimate possible unmapped rectangular and round candidates from the visible authorised imagery."));
         add(Box.createVerticalStrut(6));
@@ -1158,8 +1158,15 @@ final class TaskReconnaissancePanel extends JPanel {
                 BuildingCandidateScanner.Shape shape = classified == BuildingShapeClassifier.Shape.ROUND
                         ? BuildingCandidateScanner.Shape.ROUND
                         : BuildingCandidateScanner.Shape.RECTANGULAR;
-                BuildingCandidateScanner.Evidence evidence = BuildingCandidateScanner.evidenceFor(
-                        fresh.image, shape, local.getBounds());
+                BuildingCandidateScanner.Evidence evidence;
+                try {
+                    evidence = BuildingCandidateScanner.evidenceFor(
+                            fresh.image, shape, local.getBounds());
+                } catch (IllegalArgumentException | IndexOutOfBoundsException exception) {
+                    // One partly visible or otherwise unusable outline must not
+                    // abort learning from every other newly drawn building.
+                    continue;
+                }
                 if (evidence != null) {
                     if (learningStore.observe(reference, evidence, true, 1.5, 1)) {
                         learnedBuildingWays.add(way);

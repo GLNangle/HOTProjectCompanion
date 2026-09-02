@@ -19,6 +19,7 @@ public final class BuildingCandidateScannerTest {
         rejectsRoadBandWithDarkEdge();
         rejectsVegetationPatch();
         assessesMappedOutlinesForReview();
+        safelyAssessesOutlinesTouchingImageEdges();
         classifiesMappedFootprints();
         System.out.println("BuildingCandidateScannerTest: all tests passed");
     }
@@ -137,6 +138,35 @@ public final class BuildingCandidateScannerTest {
                 "roof-like mapped outline is not flagged as weak evidence");
         require(ground != null && ground.getScore() < 45,
                 "unshadowed mapped patch is available for cautious review");
+    }
+
+    private static void safelyAssessesOutlinesTouchingImageEdges() {
+        BufferedImage image = new BufferedImage(64, 48, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setColor(new Color(120, 115, 98));
+            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+            graphics.setColor(new Color(185, 172, 140));
+            graphics.fillRect(0, 0, 18, 16);
+            graphics.fillRect(image.getWidth() - 18, 0, 18, 16);
+            graphics.fillRect(0, image.getHeight() - 16, 18, 16);
+            graphics.fillRect(image.getWidth() - 18, image.getHeight() - 16, 18, 16);
+        } finally {
+            graphics.dispose();
+        }
+        java.awt.Rectangle[] edges = {
+            new java.awt.Rectangle(0, 0, 18, 16),
+            new java.awt.Rectangle(image.getWidth() - 18, 0, 18, 16),
+            new java.awt.Rectangle(0, image.getHeight() - 16, 18, 16),
+            new java.awt.Rectangle(image.getWidth() - 18,
+                    image.getHeight() - 16, 18, 16)
+        };
+        for (java.awt.Rectangle edge : edges) {
+            BuildingCandidateScanner.assess(image,
+                    BuildingCandidateScanner.Shape.RECTANGULAR, edge);
+            BuildingCandidateScanner.assess(image,
+                    BuildingCandidateScanner.Shape.ROUND, edge);
+        }
     }
 
     private static BufferedImage flatPatch(Color background, Color patch, boolean round) {

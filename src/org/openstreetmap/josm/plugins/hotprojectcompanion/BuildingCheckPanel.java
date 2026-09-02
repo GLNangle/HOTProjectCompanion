@@ -54,7 +54,7 @@ final class BuildingCheckPanel extends JPanel {
     BuildingCheckPanel() {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setAlignmentX(Component.LEFT_ALIGNMENT);
-        setBorder(BorderFactory.createTitledBorder(tr("Building check")));
+        setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
         setMaximumSize(new Dimension(Integer.MAX_VALUE, 610));
 
         add(wrappingLabel("JOSM will compare the selected outline with the visible authorised imagery and usable example images from this task."));

@@ -12,6 +12,7 @@ public final class AllTests {
         TaskContextParserTest.main(args);
         SplitFeedbackCacheTest.main(args);
         MapCaptureTest.main(args);
+        CollapsibleSectionTest.main(args);
         BuildingImageAnalyserTest.main(args);
         BuildingCandidateScannerTest.main(args);
         CandidateReviewNavigationTest.main(args);
