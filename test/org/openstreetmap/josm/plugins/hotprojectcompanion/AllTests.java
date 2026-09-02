@@ -23,6 +23,7 @@ public final class AllTests {
         TaskStatusTransitionTest.run();
         LearningProfileTest.main(args);
         GeometryLearningProfileTest.main(args);
+        SharedLearningTest.main(args);
         System.out.println("HOT Project Companion: all tests passed");
     }
 }

@@ -12,9 +12,6 @@ import java.util.List;
 /** Conservative, dependency-free proposal scan for roof-like regions in a task image. */
 final class BuildingCandidateScanner {
     private static final int HIGH_CONFIDENCE = 78;
-    private static final int MIN_CONFIDENCE = 61;
-    private static final int MIN_BASELINE_FOR_LEARNED_ADMISSION = 60;
-    private static final int MAX_RESULTS = 12;
 
     private BuildingCandidateScanner() {
     }
@@ -37,9 +34,27 @@ final class BuildingCandidateScanner {
     static Result scan(BufferedImage image, Polygon taskBoundary, List<Polygon> mappedBuildings,
             LearningProfile learningProfile, GeometryLearningProfile geometryProfile,
             double metresPerPixel) {
+        return scan(image, taskBoundary, mappedBuildings, learningProfile, geometryProfile,
+                metresPerPixel, ScanMode.BALANCED, Collections.emptyList());
+    }
+
+    static Result scan(BufferedImage image, Polygon taskBoundary, List<Polygon> mappedBuildings,
+            LearningProfile learningProfile, GeometryLearningProfile geometryProfile,
+            double metresPerPixel, ScanMode mode, List<Rectangle> reviewedRegions) {
+        return scan(image, taskBoundary, mappedBuildings, learningProfile, geometryProfile,
+                metresPerPixel, mode, reviewedRegions, null);
+    }
+
+    static Result scan(BufferedImage image, Polygon taskBoundary, List<Polygon> mappedBuildings,
+            LearningProfile learningProfile, GeometryLearningProfile geometryProfile,
+            double metresPerPixel, ScanMode mode, List<Rectangle> reviewedRegions,
+            SharedLearningProfile sharedProfile) {
         if (image == null || taskBoundary == null || taskBoundary.npoints < 3) {
             throw new IllegalArgumentException("A task image and boundary are required");
         }
+        ScanMode effectiveMode = mode == null ? ScanMode.CONSERVATIVE : mode;
+        List<Rectangle> exclusions = reviewedRegions == null
+                ? Collections.emptyList() : reviewedRegions;
         IntegralImage integral = new IntegralImage(image);
         List<Candidate> proposals = new ArrayList<>();
         int shortest = Math.min(image.getWidth(), image.getHeight());
@@ -51,21 +66,27 @@ final class BuildingCandidateScanner {
             // The hard edge-coverage gates need a reasonably close fit. A finer
             // stride avoids missing a real roof simply because the coarse grid
             // landed a few pixels outside its perimeter.
-            int stride = Math.max(3, size / 8);
+            // Conservative mode samples more precisely so a genuinely strong roof
+            // can meet its higher threshold without a coarse grid landing just
+            // outside the visible edge. The looser modes retain the faster grid.
+            int stride = Math.max(3, size
+                    / (effectiveMode == ScanMode.CONSERVATIVE ? 12 : 8));
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals, size, size, stride,
-                    learningProfile, geometryProfile);
+                    learningProfile, geometryProfile, effectiveMode, exclusions, sharedProfile);
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
                     (int) Math.round(size * 1.33), size, stride,
-                    learningProfile, geometryProfile);
+                    learningProfile, geometryProfile, effectiveMode, exclusions, sharedProfile);
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
                     size, (int) Math.round(size * 1.33), stride,
-                    learningProfile, geometryProfile);
+                    learningProfile, geometryProfile, effectiveMode, exclusions, sharedProfile);
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
-                    (int) Math.round(size * 1.45), size, stride, learningProfile, geometryProfile);
+                    (int) Math.round(size * 1.45), size, stride, learningProfile, geometryProfile,
+                    effectiveMode, exclusions, sharedProfile);
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
-                    size, (int) Math.round(size * 1.45), stride, learningProfile, geometryProfile);
+                    size, (int) Math.round(size * 1.45), stride, learningProfile, geometryProfile,
+                    effectiveMode, exclusions, sharedProfile);
             scanCircles(integral, taskBoundary, mappedBuildings, proposals, size, stride,
-                    learningProfile, geometryProfile);
+                    learningProfile, geometryProfile, effectiveMode, exclusions, sharedProfile);
         }
 
         proposals.sort(Comparator.comparingInt(Candidate::getConfidence).reversed());
@@ -82,7 +103,7 @@ final class BuildingCandidateScanner {
             }
             if (!duplicate) {
                 retained.add(proposal);
-                if (retained.size() >= MAX_RESULTS) {
+                if (retained.size() >= effectiveMode.maxResults) {
                     break;
                 }
             }
@@ -118,10 +139,16 @@ final class BuildingCandidateScanner {
     }
 
     static Assessment assess(BufferedImage image, Shape shape, Rectangle bounds) {
+        return assess(image, shape, bounds, ScanMode.BALANCED);
+    }
+
+    static Assessment assess(BufferedImage image, Shape shape, Rectangle bounds,
+            ScanMode mode) {
         if (image == null || shape == null || bounds == null || bounds.width < 4
                 || bounds.height < 4) {
             return null;
         }
+        ScanMode effectiveMode = mode == null ? ScanMode.BALANCED : mode;
         IntegralImage integral = new IntegralImage(image);
         Rectangle clipped = bounds.intersection(new Rectangle(1, 1,
                 Math.max(0, image.getWidth() - 2), Math.max(0, image.getHeight() - 2)));
@@ -129,30 +156,33 @@ final class BuildingCandidateScanner {
             return null;
         }
         ScoredEvidence measurement = shape == Shape.ROUND
-                ? circleConfidence(integral, clipped)
-                : rectangleConfidence(integral, clipped);
+                ? circleConfidence(integral, clipped, effectiveMode)
+                : rectangleConfidence(integral, clipped, effectiveMode);
         return new Assessment(percent(measurement.score), measurement.evidence);
     }
 
     private static void scanRectangles(IntegralImage integral, Polygon boundary,
             List<Polygon> mapped, List<Candidate> proposals, int width, int height, int stride,
-            LearningProfile learningProfile, GeometryLearningProfile geometryProfile) {
+            LearningProfile learningProfile, GeometryLearningProfile geometryProfile,
+            ScanMode mode, List<Rectangle> reviewedRegions,
+            SharedLearningProfile sharedProfile) {
         int marginX = Math.max(3, width / 4);
         int marginY = Math.max(3, height / 4);
         for (int y = marginY; y + height + marginY < integral.height; y += stride) {
             for (int x = marginX; x + width + marginX < integral.width; x += stride) {
                 Rectangle box = new Rectangle(x, y, width, height);
-                if (!insideBoundary(boundary, box) || overlapsMapped(mapped, box)) {
+                if (!insideBoundary(boundary, box) || overlapsMapped(mapped, box)
+                        || overlapsReviewed(reviewedRegions, box)) {
                     continue;
                 }
-                ScoredEvidence measurement = rectangleConfidence(integral, box);
+                ScoredEvidence measurement = rectangleConfidence(integral, box, mode);
                 Rectangle displayBox = adjustedBox(box, integral, boundary, mapped,
                         geometryProfile, false);
                 if (!displayBox.equals(box)) {
-                    ScoredEvidence adjusted = rectangleConfidence(integral, displayBox);
+                    ScoredEvidence adjusted = rectangleConfidence(integral, displayBox, mode);
                     if (adjusted.evidence == null
                             || adjusted.score < measurement.score - 0.06
-                            || percent(adjusted.score) < MIN_BASELINE_FOR_LEARNED_ADMISSION) {
+                            || percent(adjusted.score) < mode.minimumBaseline) {
                         displayBox = box;
                     } else {
                         measurement = adjusted;
@@ -160,9 +190,11 @@ final class BuildingCandidateScanner {
                 }
                 double confidence = learningProfile == null ? measurement.score
                         : learningProfile.adjust(measurement.score, measurement.evidence);
+                confidence = sharedProfile == null ? confidence
+                        : sharedProfile.adjust(confidence, measurement.evidence);
                 int score = percent(confidence);
-                if (score >= MIN_CONFIDENCE
-                        && percent(measurement.score) >= MIN_BASELINE_FOR_LEARNED_ADMISSION) {
+                if (score >= mode.minimumConfidence
+                        && percent(measurement.score) >= mode.minimumBaseline) {
                     proposals.add(new Candidate(Shape.RECTANGULAR, score,
                             percent(measurement.score), displayBox, measurement.evidence));
                 }
@@ -172,22 +204,25 @@ final class BuildingCandidateScanner {
 
     private static void scanCircles(IntegralImage integral, Polygon boundary,
             List<Polygon> mapped, List<Candidate> proposals, int diameter, int stride,
-            LearningProfile learningProfile, GeometryLearningProfile geometryProfile) {
+            LearningProfile learningProfile, GeometryLearningProfile geometryProfile,
+            ScanMode mode, List<Rectangle> reviewedRegions,
+            SharedLearningProfile sharedProfile) {
         int margin = Math.max(3, diameter / 4);
         for (int y = margin; y + diameter + margin < integral.height; y += stride) {
             for (int x = margin; x + diameter + margin < integral.width; x += stride) {
                 Rectangle box = new Rectangle(x, y, diameter, diameter);
-                if (!insideBoundary(boundary, box) || overlapsMapped(mapped, box)) {
+                if (!insideBoundary(boundary, box) || overlapsMapped(mapped, box)
+                        || overlapsReviewed(reviewedRegions, box)) {
                     continue;
                 }
-                ScoredEvidence measurement = circleConfidence(integral, box);
+                ScoredEvidence measurement = circleConfidence(integral, box, mode);
                 Rectangle displayBox = adjustedBox(box, integral, boundary, mapped,
                         geometryProfile, true);
                 if (!displayBox.equals(box)) {
-                    ScoredEvidence adjusted = circleConfidence(integral, displayBox);
+                    ScoredEvidence adjusted = circleConfidence(integral, displayBox, mode);
                     if (adjusted.evidence == null
                             || adjusted.score < measurement.score - 0.06
-                            || percent(adjusted.score) < MIN_BASELINE_FOR_LEARNED_ADMISSION) {
+                            || percent(adjusted.score) < mode.minimumBaseline) {
                         displayBox = box;
                     } else {
                         measurement = adjusted;
@@ -195,9 +230,11 @@ final class BuildingCandidateScanner {
                 }
                 double confidence = learningProfile == null ? measurement.score
                         : learningProfile.adjust(measurement.score, measurement.evidence);
+                confidence = sharedProfile == null ? confidence
+                        : sharedProfile.adjust(confidence, measurement.evidence);
                 int score = percent(confidence);
-                if (score >= MIN_CONFIDENCE
-                        && percent(measurement.score) >= MIN_BASELINE_FOR_LEARNED_ADMISSION) {
+                if (score >= mode.minimumConfidence
+                        && percent(measurement.score) >= mode.minimumBaseline) {
                     proposals.add(new Candidate(Shape.ROUND, score,
                             percent(measurement.score), displayBox, measurement.evidence));
                 }
@@ -223,7 +260,8 @@ final class BuildingCandidateScanner {
                 ? adjusted : original;
     }
 
-    private static ScoredEvidence rectangleConfidence(IntegralImage image, Rectangle box) {
+    private static ScoredEvidence rectangleConfidence(IntegralImage image, Rectangle box,
+            ScanMode mode) {
         int insetX = Math.max(2, box.width / 5);
         int insetY = Math.max(2, box.height / 5);
         Rectangle inside = new Rectangle(box.x + insetX, box.y + insetY,
@@ -264,16 +302,19 @@ final class BuildingCandidateScanner {
         double shadow = shadowCue(insideMean, sides);
         boolean vegetation = strongVegetation(image, inside);
         Evidence evidence = new Evidence(consistency, contrast, boundary, shadow, geometry);
-        if (vegetation || consistency < 0.60 || contrast < 0.22 || boundary < 0.28
-                || edgeBalance < 0.34 || edgeCoverage < 0.46
-                || geometry < 0.24 || shadow < 0.26) {
+        if (vegetation || consistency < mode.minimumConsistency
+                || contrast < mode.minimumContrast || boundary < mode.minimumBoundary
+                || edgeBalance < mode.minimumEdgeBalance
+                || edgeCoverage < mode.minimumEdgeCoverage
+                || geometry < mode.minimumGeometry || shadow < mode.minimumShadow) {
             return new ScoredEvidence(0, evidence);
         }
         return new ScoredEvidence(clamp(consistency * 0.08 + contrast * 0.18 + boundary * 0.24
                 + shadow * 0.32 + geometry * 0.18), evidence);
     }
 
-    private static ScoredEvidence circleConfidence(IntegralImage image, Rectangle box) {
+    private static ScoredEvidence circleConfidence(IntegralImage image, Rectangle box,
+            ScanMode mode) {
         double centreX = box.getCenterX();
         double centreY = box.getCenterY();
         double radius = Math.min(box.width, box.height) / 2.0;
@@ -327,8 +368,10 @@ final class BuildingCandidateScanner {
         boolean vegetation = strongVegetation(image, centre);
         Evidence evidence = new Evidence(consistency, contrast, edge, shadow,
                 circularBoundary);
-        if (vegetation || consistency < 0.60 || contrast < 0.22 || edge < 0.28
-                || edgeCoverage < 0.50 || circularBoundary < 0.28 || shadow < 0.26) {
+        if (vegetation || consistency < mode.minimumConsistency
+                || contrast < mode.minimumContrast || edge < mode.minimumBoundary
+                || edgeCoverage < mode.minimumCircleCoverage
+                || circularBoundary < mode.minimumGeometry || shadow < mode.minimumShadow) {
             return new ScoredEvidence(0, evidence);
         }
         return new ScoredEvidence(clamp(consistency * 0.08 + contrast * 0.18 + edge * 0.24
@@ -473,6 +516,22 @@ final class BuildingCandidateScanner {
         return false;
     }
 
+    private static boolean overlapsReviewed(List<Rectangle> reviewed, Rectangle candidate) {
+        if (reviewed == null || reviewed.isEmpty()) {
+            return false;
+        }
+        double centreX = candidate.getCenterX();
+        double centreY = candidate.getCenterY();
+        for (Rectangle area : reviewed) {
+            if (area != null && (area.contains(centreX, centreY)
+                    || candidate.contains(area.getCenterX(), area.getCenterY())
+                    || overlap(candidate, area) > 0.12)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static double overlap(Rectangle first, Rectangle second) {
         Rectangle intersection = first.intersection(second);
         if (intersection.isEmpty()) {
@@ -502,6 +561,59 @@ final class BuildingCandidateScanner {
         ROUND
     }
 
+    enum ScanMode {
+        CONSERVATIVE("Conservative", 68, 66, 8,
+                0.65, 0.28, 0.31, 0.34, 0.40, 0.55, 0.57, 0.25),
+        BALANCED("Balanced", 61, 60, 12,
+                0.60, 0.22, 0.28, 0.26, 0.34, 0.46, 0.50, 0.24),
+        EXPLORATORY("Exploratory", 52, 49, 18,
+                0.52, 0.14, 0.20, 0.14, 0.24, 0.34, 0.38, 0.16);
+
+        private final String label;
+        private final int minimumConfidence;
+        private final int minimumBaseline;
+        private final int maxResults;
+        private final double minimumConsistency;
+        private final double minimumContrast;
+        private final double minimumBoundary;
+        private final double minimumShadow;
+        private final double minimumEdgeBalance;
+        private final double minimumEdgeCoverage;
+        private final double minimumCircleCoverage;
+        private final double minimumGeometry;
+
+        ScanMode(String label, int minimumConfidence, int minimumBaseline, int maxResults,
+                double minimumConsistency, double minimumContrast, double minimumBoundary,
+                double minimumShadow, double minimumEdgeBalance, double minimumEdgeCoverage,
+                double minimumCircleCoverage, double minimumGeometry) {
+            this.label = label;
+            this.minimumConfidence = minimumConfidence;
+            this.minimumBaseline = minimumBaseline;
+            this.maxResults = maxResults;
+            this.minimumConsistency = minimumConsistency;
+            this.minimumContrast = minimumContrast;
+            this.minimumBoundary = minimumBoundary;
+            this.minimumShadow = minimumShadow;
+            this.minimumEdgeBalance = minimumEdgeBalance;
+            this.minimumEdgeCoverage = minimumEdgeCoverage;
+            this.minimumCircleCoverage = minimumCircleCoverage;
+            this.minimumGeometry = minimumGeometry;
+        }
+
+        static ScanMode fromPreference(String value) {
+            try {
+                return value == null ? CONSERVATIVE : valueOf(value);
+            } catch (IllegalArgumentException exception) {
+                return CONSERVATIVE;
+            }
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
     static final class Candidate {
         private final Shape shape;
         private final int confidence;
@@ -524,6 +636,8 @@ final class BuildingCandidateScanner {
         Rectangle getBounds() { return new Rectangle(bounds); }
         Evidence getEvidence() { return evidence; }
         boolean isHighConfidence() { return confidence >= HIGH_CONFIDENCE; }
+        String explanation() { return evidence == null ? "limited visual evidence"
+                : evidence.explanation(); }
     }
 
     static final class Evidence {
@@ -544,6 +658,30 @@ final class BuildingCandidateScanner {
 
         double[] values() {
             return new double[] {consistency, contrast, boundary, shadow, geometry};
+        }
+
+        String explanation() {
+            List<String> reasons = new ArrayList<>();
+            if (boundary >= 0.60 && geometry >= 0.50) {
+                reasons.add("coherent roof boundary");
+            } else if (boundary >= 0.42) {
+                reasons.add("visible boundary contrast");
+            }
+            if (shadow >= 0.52) {
+                reasons.add("directional shadow");
+            } else if (shadow >= 0.30) {
+                reasons.add("possible one-sided shadow");
+            }
+            if (consistency >= 0.72) {
+                reasons.add("consistent interior texture");
+            }
+            if (contrast >= 0.45) {
+                reasons.add("clear separation from surroundings");
+            }
+            if (reasons.isEmpty()) {
+                reasons.add("combined boundary, contrast and shadow evidence");
+            }
+            return String.join(", ", reasons);
         }
     }
 

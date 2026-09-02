@@ -49,9 +49,12 @@ public final class CompanionPanel extends ToggleDialog {
     private final BuildingCheckPanel buildingCheck = new BuildingCheckPanel();
     private final HotTaskingManagerClient taskingManagerClient = new HotTaskingManagerClient();
     private final LearningStore learningStore = new LearningStore();
-    private final LearningPanel learning = new LearningPanel(learningStore, taskingManagerClient);
+    private final SharedLearningStore sharedLearningStore = new SharedLearningStore();
+    private final SharedLearningClient sharedLearningClient = new SharedLearningClient();
+    private final LearningPanel learning = new LearningPanel(learningStore, taskingManagerClient,
+            sharedLearningStore, sharedLearningClient);
     private final TaskReconnaissancePanel reconnaissance = new TaskReconnaissancePanel(
-            learningStore, learning::refresh);
+            learningStore, sharedLearningStore, learning::refresh);
     private final SplitFeedbackCache splitFeedbackCache = new SplitFeedbackCache();
     private int requestGeneration;
 
@@ -121,7 +124,7 @@ public final class CompanionPanel extends ToggleDialog {
         fallback.setBorder(BorderFactory.createTitledBorder(tr("Manual fallback")));
         content.add(fallback);
         content.add(Box.createVerticalStrut(8));
-        content.add(collapsible("learning", tr("Local learning"), learning, false));
+        content.add(collapsible("learning", tr("Learning"), learning, false));
         content.add(Box.createVerticalStrut(8));
         content.add(collapsible("what-to-map", tr("What to map"),
                 instructionSection(mapSummary, instructionImages), true));

@@ -16,6 +16,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -31,14 +32,27 @@ final class LearningPanel extends JPanel {
 
     private final LearningStore store;
     private final HotTaskingManagerClient client;
+    private final SharedLearningStore sharedStore;
+    private final SharedLearningClient sharedClient;
     private final JLabel summary = label("");
     private final JLabel state = wrappingLabel("Learning stays on this computer.");
+    private final JLabel sharedSummary = wrappingLabel("");
+    private final JLabel sharedState = wrappingLabel("Shared learning is off.");
     private final JButton historyButton = SidebarButtons.create(tr("Learning history…"));
     private final JButton syncButton = SidebarButtons.create(tr("Check task statuses"));
+    private final JCheckBox shareOptIn = new JCheckBox(tr("Contribute anonymous learning (test)"));
+    private final JButton sendButton = SidebarButtons.create(tr("Send queued examples"));
+    private final JButton profileButton = SidebarButtons.create(tr("Refresh shared profile"));
+    private final JButton withdrawButton = SidebarButtons.create(tr("Withdraw sent examples"));
+    private final JButton privacyButton = SidebarButtons.create(tr("What is shared?"));
+    private boolean updatingConsent;
 
-    LearningPanel(LearningStore store, HotTaskingManagerClient client) {
+    LearningPanel(LearningStore store, HotTaskingManagerClient client,
+            SharedLearningStore sharedStore, SharedLearningClient sharedClient) {
         this.store = store;
         this.client = client;
+        this.sharedStore = sharedStore;
+        this.sharedClient = sharedClient;
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setAlignmentX(Component.LEFT_ALIGNMENT);
         setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
@@ -56,6 +70,38 @@ final class LearningPanel extends JPanel {
         add(Box.createVerticalStrut(4));
         state.setForeground(new Color(90, 90, 90));
         add(state);
+        add(Box.createVerticalStrut(10));
+        JLabel sharedHeading = label("<html><b>Shared learning — controlled test</b></html>");
+        add(sharedHeading);
+        add(Box.createVerticalStrut(3));
+        shareOptIn.setAlignmentX(Component.LEFT_ALIGNMENT);
+        shareOptIn.setSelected(sharedStore.isEnabled());
+        shareOptIn.addActionListener(event -> changeConsent());
+        add(shareOptIn);
+        add(Box.createVerticalStrut(3));
+        add(sharedSummary);
+        add(Box.createVerticalStrut(3));
+        JPanel sharedButtons = new JPanel();
+        sharedButtons.setLayout(new BoxLayout(sharedButtons, BoxLayout.X_AXIS));
+        sharedButtons.setAlignmentX(Component.LEFT_ALIGNMENT);
+        sendButton.addActionListener(event -> sendQueued());
+        profileButton.addActionListener(event -> refreshSharedProfile());
+        sharedButtons.add(sendButton);
+        sharedButtons.add(Box.createHorizontalStrut(4));
+        sharedButtons.add(profileButton);
+        add(sharedButtons);
+        JPanel privacyButtons = new JPanel();
+        privacyButtons.setLayout(new BoxLayout(privacyButtons, BoxLayout.X_AXIS));
+        privacyButtons.setAlignmentX(Component.LEFT_ALIGNMENT);
+        privacyButton.addActionListener(event -> showPrivacyDetails());
+        withdrawButton.addActionListener(event -> withdrawSent());
+        privacyButtons.add(privacyButton);
+        privacyButtons.add(Box.createHorizontalStrut(4));
+        privacyButtons.add(withdrawButton);
+        add(privacyButtons);
+        add(Box.createVerticalStrut(3));
+        sharedState.setForeground(new Color(90, 90, 90));
+        add(sharedState);
         refresh();
     }
 
@@ -70,6 +116,221 @@ final class LearningPanel extends JPanel {
                 + store.awaitingCount() + " saved task(s) currently marked as awaiting validation"
                 + "</div></html>");
         syncButton.setEnabled(!store.recordsForSync().isEmpty());
+        List<SharedLearningStore.Example> queued = sharedStore.queued();
+        List<SharedLearningStore.Example> sent = sharedStore.sent();
+        SharedLearningProfile shared = sharedStore.profile();
+        String profileText = shared.isActive()
+                ? "active profile v" + shared.getVersion() + " · "
+                        + shared.getContributorCount() + " contributors · "
+                        + shared.getSampleCount() + " validated samples"
+                : "profile " + shared.getStatus().replace('_', ' ');
+        sharedSummary.setText("<html><div style='width:300px'>"
+                + queued.size() + " queued locally · " + sent.size()
+                + " sent and withdrawable<br>Shared " + profileText
+                + "</div></html>");
+        shareOptIn.setSelected(sharedStore.isEnabled());
+        sendButton.setEnabled(sharedStore.isEnabled() && !queued.isEmpty());
+        withdrawButton.setEnabled(!sent.isEmpty());
+    }
+
+    private void changeConsent() {
+        if (updatingConsent) {
+            return;
+        }
+        boolean enable = shareOptIn.isSelected();
+        if (enable) {
+            JTextArea consent = new JTextArea(
+                    "This controlled test shares only project/task numbers, decision time, "
+                    + "a hashed imagery identifier, building/not-building decision, shape, "
+                    + "five numeric visual measurements and selected geometry-correction flags.\n\n"
+                    + "It never sends imagery pixels, candidate coordinates, comments, mapper "
+                    + "names or OSM login details. Examples remain quarantined until dated "
+                    + "Tasking Manager validation evidence is available.\n\nContinue?",
+                    8, 52);
+            consent.setEditable(false);
+            consent.setLineWrap(true);
+            consent.setWrapStyleWord(true);
+            consent.setOpaque(false);
+            consent.setFont(shareOptIn.getFont());
+            consent.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+            int choice = JOptionPane.showConfirmDialog(this, consent,
+                    tr("Enable anonymous shared learning"),
+                    JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (choice != JOptionPane.YES_OPTION) {
+                updatingConsent = true;
+                shareOptIn.setSelected(false);
+                updatingConsent = false;
+                return;
+            }
+        }
+        sharedStore.setEnabled(enable);
+        setSharedState(enable
+                ? "Sharing enabled. New examples queue locally until you press Send queued examples."
+                : "Sharing disabled. No new examples will be queued; previously sent examples remain withdrawable.",
+                enable ? new Color(0, 105, 45) : new Color(90, 90, 90));
+        refresh();
+    }
+
+    private void sendQueued() {
+        List<SharedLearningStore.Example> all = sharedStore.queued();
+        if (all.isEmpty()) {
+            setSharedState("No anonymous examples are queued.", new Color(90, 90, 90));
+            return;
+        }
+        List<SharedLearningStore.Example> batch = new ArrayList<>(
+                all.subList(0, Math.min(50, all.size())));
+        setSharedButtonsEnabled(false);
+        setSharedState("Sending " + batch.size()
+                + " anonymous example(s) into quarantine…", new Color(0, 90, 145));
+        new SwingWorker<java.util.Map<String, String>, Void>() {
+            @Override
+            protected java.util.Map<String, String> doInBackground() throws Exception {
+                return sharedClient.submit(batch, sharedStore.installationId(),
+                        sharedStore.withdrawalToken());
+            }
+
+            @Override
+            protected void done() {
+                setSharedButtonsEnabled(true);
+                try {
+                    java.util.Map<String, String> receipts = get();
+                    sharedStore.markSent(receipts);
+                    setSharedState(receipts.size()
+                            + " example(s) sent. They are quarantined and remain withdrawable.",
+                            new Color(0, 105, 45));
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    setSharedState("Shared submission was interrupted.", new Color(170, 35, 35));
+                } catch (ExecutionException exception) {
+                    setSharedState(message("Could not send anonymous examples", exception),
+                            new Color(170, 35, 35));
+                }
+                refresh();
+            }
+        }.execute();
+    }
+
+    private void refreshSharedProfile() {
+        setSharedButtonsEnabled(false);
+        setSharedState("Downloading the anonymous aggregate profile…", new Color(0, 90, 145));
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() throws Exception {
+                return sharedClient.fetchProfile();
+            }
+
+            @Override
+            protected void done() {
+                setSharedButtonsEnabled(true);
+                try {
+                    sharedStore.setProfile(get());
+                    SharedLearningProfile profile = sharedStore.profile();
+                    setSharedState(profile.isActive()
+                            ? "Shared aggregate refreshed. Its scanner influence is strictly capped."
+                            : "Shared aggregate refreshed; there is not yet enough validated data to influence scanning.",
+                            new Color(0, 105, 45));
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    setSharedState("Profile refresh was interrupted.", new Color(170, 35, 35));
+                } catch (ExecutionException exception) {
+                    setSharedState(message("Could not refresh the shared profile", exception),
+                            new Color(170, 35, 35));
+                }
+                refresh();
+            }
+        }.execute();
+    }
+
+    private void withdrawSent() {
+        List<SharedLearningStore.Example> sent = sharedStore.sent();
+        if (sent.isEmpty()) {
+            return;
+        }
+        int choice = JOptionPane.showConfirmDialog(this,
+                "Withdraw all " + sent.size() + " retained shared example(s)?",
+                tr("Withdraw shared examples"), JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+        if (choice != JOptionPane.YES_OPTION) {
+            return;
+        }
+        setSharedButtonsEnabled(false);
+        setSharedState("Withdrawing sent examples…", new Color(0, 90, 145));
+        new SwingWorker<List<String>, Void>() {
+            @Override
+            protected List<String> doInBackground() throws Exception {
+                List<String> withdrawn = new ArrayList<>();
+                for (SharedLearningStore.Example example : sent) {
+                    sharedClient.withdraw(example.getServiceId(), sharedStore.withdrawalToken());
+                    withdrawn.add(example.getServiceId());
+                }
+                return withdrawn;
+            }
+
+            @Override
+            protected void done() {
+                setSharedButtonsEnabled(true);
+                try {
+                    List<String> withdrawn = get();
+                    sharedStore.markWithdrawn(withdrawn);
+                    setSharedState(withdrawn.size() + " shared example(s) withdrawn.",
+                            new Color(0, 105, 45));
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    setSharedState("Withdrawal was interrupted.", new Color(170, 35, 35));
+                } catch (ExecutionException exception) {
+                    setSharedState(message("Could not withdraw every example", exception),
+                            new Color(170, 35, 35));
+                }
+                refresh();
+            }
+        }.execute();
+    }
+
+    private void showPrivacyDetails() {
+        JTextArea details = new JTextArea(
+                "SHARED\n"
+                + "• HOT project and task numbers\n"
+                + "• decision time\n"
+                + "• one-way hashed imagery identifier\n"
+                + "• building/not-building and rectangular/round/unknown decision\n"
+                + "• five numeric visual measurements\n"
+                + "• moved/rotated/reshaped/resized flags\n\n"
+                + "NEVER SHARED\n"
+                + "• imagery or screenshots\n"
+                + "• candidate coordinates or building geometry\n"
+                + "• comments or task instructions\n"
+                + "• mapper name, OSM username, email or login tokens\n\n"
+                + "Sharing is off by default. During this controlled test, examples queue "
+                + "locally and are sent only when you press Send queued examples. The service "
+                + "quarantines submissions and publishes only a thresholded multi-mapper aggregate. "
+                + "Sent examples can be withdrawn from this panel.", 18, 48);
+        details.setEditable(false);
+        details.setLineWrap(true);
+        details.setWrapStyleWord(true);
+        details.setCaretPosition(0);
+        JOptionPane.showMessageDialog(this, new JScrollPane(details),
+                tr("HOT Project Companion — shared learning privacy"),
+                JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void setSharedButtonsEnabled(boolean enabled) {
+        sendButton.setEnabled(enabled && sharedStore.isEnabled()
+                && !sharedStore.queued().isEmpty());
+        profileButton.setEnabled(enabled);
+        withdrawButton.setEnabled(enabled && !sharedStore.sent().isEmpty());
+        shareOptIn.setEnabled(enabled);
+    }
+
+    private void setSharedState(String text, Color colour) {
+        sharedState.setForeground(colour);
+        sharedState.setText("<html><div style='width:300px'>" + escapeHtml(text)
+                + "</div></html>");
+    }
+
+    private static String message(String fallback, ExecutionException exception) {
+        Throwable cause = exception.getCause();
+        return cause == null || cause.getMessage() == null
+                ? fallback : fallback + ": " + cause.getMessage();
     }
 
     private void syncStatuses() {

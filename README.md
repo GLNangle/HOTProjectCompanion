@@ -6,9 +6,9 @@ Maintainer: Gemma Louise Nangle
 
 Project page: https://github.com/GLNangle/HOTProjectCompanion
 
-## Current prototype
+## Current release
 
-Version 0.9.1 provides:
+Version 1.0.0 provides:
 
 - a dockable **HOT Project Companion** sidebar in JOSM with independently collapsible sections whose states persist across restarts;
 - automatic project and task detection from the JOSM task-boundary layer;
@@ -31,6 +31,12 @@ Version 0.9.1 provides:
 - read-only **Task building reconnaissance** inside the detected HOT boundary;
 - separate **Scan entire task** and **Scan visible area** actions, with partial-scan counts limited
   to the displayed part of the task boundary;
+- persistent **Conservative**, **Balanced** and **Exploratory** sensitivity modes, with Conservative
+  as the default for the shortest and strongest review list;
+- a short explanation of the boundary, shadow, texture and contrast evidence that caused each
+  candidate to be shown;
+- **Rescan after review**, which returns to the previous scan extent and excludes locations already
+  accepted, rejected or mapped during the current task session;
 - exact counts of downloaded closed building ways classified as rectangular/orthogonal, round or other;
 - conservative estimates of possible unmapped rectangular, round and uncertain candidates from the rendered authorised imagery;
 - a review checklist with annotated thumbnails and buttons that zoom to a marked close-up of each candidate;
@@ -49,9 +55,21 @@ Version 0.9.1 provides:
 - a per-task learning cap that prevents one unusual task from dominating the local profile;
 - a **Local learning** summary and history window that remain available after the mapper leaves a task;
 - **Sync validation outcomes**, which checks the saved project/task numbers against HOT without
-  requiring the submitted task to be reopened.
+  requiring the submitted task to be reopened;
+- an off-by-default **Shared learning — controlled test** with explicit consent, a local queue,
+  manual submission, retained withdrawal receipts and a plain-language disclosure of every field;
+- anonymous contribution of project/task numbers, decision time, a one-way imagery identifier,
+  building decision, shape, numeric visual evidence and selected geometry-correction flags;
+- no shared imagery pixels, screenshots, candidate coordinates, geometry, comments, mapper names,
+  OSM usernames, email addresses or login credentials;
+- download of a thresholded multi-mapper aggregate which remains inactive until the service has
+  enough validated examples from at least five contributors, and whose client-side influence is
+  capped below the scanner's local hard safety gates.
 
-It does **not** use an AI image classifier, claim a statistical probability, move imagery, modify OSM features, upload data, send captured map images, change task status, post comments or access private projects.
+It does **not** use an AI image classifier, claim a statistical probability, move imagery, modify
+OSM features, upload OSM data, send captured map images, change task status, post comments or access
+private projects. Shared statistical contribution is optional, disabled by default and manually
+triggered during the controlled test.
 
 Version 0.1.1 fixes the custom sidebar icon path for JOSM 19613. Version 0.1.2 corrects the local build signature for `MapFrame.addToggleDialog`. Version 0.1.3 recognises names such as `Boundary for task: 168 of TM Project #58879 – Do not edit or upload`. Version 0.1.4 loads public project and task context from the HOT Tasking Manager API. Version 0.1.5 preserves detailed feedback through the split-task workflow. Version 0.1.6 displays images referenced by project and task instructions.
 
@@ -183,6 +201,40 @@ physically plausible building proposals. If local geometry learning moves or res
 marker, the adjusted location must retain comparable visual evidence; otherwise the original
 evidence-aligned marker is kept.
 
+Version 0.10.1 adds three reconnaissance sensitivity modes. Conservative is the default and applies
+the strongest boundary, texture, contrast and directional-shadow gates with a maximum of eight
+candidates; Balanced and Exploratory progressively widen the review net. Candidate rows now explain
+the visual evidence that caused them to be retained. **Rescan after review** restores the previous
+scan extent and suppresses locations already accepted, rejected or mapped in the current task
+session, while newly mapped building outlines are also excluded through the normal mapped inventory.
+A normal **Scan entire task** or **Scan visible area** starts a fresh review session and includes
+those locations again.
+
+Version 0.11.0 adds the first opt-in client for privacy-preserving shared learning. Sharing is off by
+default. After reading an explicit disclosure, a mapper can allow new confirmed, rejected and
+scan-missed building examples to queue locally, review the queue count and press **Send queued
+examples** manually. The service receives only project/task numbers, decision time, a one-way hash
+of the authorised-imagery description, building/not-building and rectangular/round decisions, five
+numeric visual measurements and moved/rotated/reshaped/resized flags. Imagery pixels, screenshots,
+candidate coordinates, outlines, comments and identity are never included. Service receipts remain
+on the mapper's computer so sent examples can be withdrawn from JOSM.
+
+The controlled service keeps submissions quarantined while it looks for dated public Tasking
+Manager validation evidence. The plugin can download only a thresholded aggregate, never individual
+examples. An aggregate remains inactive until it reports at least five eligible contributors, 20
+balanced validated samples and both building and not-building evidence. Even then, its score change
+is capped to a three-point suppression or 1.5-point uplift and cannot bypass the original boundary,
+texture, contrast, directional-shadow, vegetation, physical-size or unlearned-baseline gates. Local
+learning continues independently and works without shared learning or network access.
+
+Version 0.11.1 constrains the shared-learning consent message to a fixed-width, word-wrapped panel,
+preventing the confirmation dialogue from extending beyond the edge of the screen.
+
+Version 1.0.0 is the first stable public release. It promotes the tested v0.11.1 feature set without
+changing scanner or learning behaviour: task guidance, local visual checks, task and visible-area
+reconnaissance, mapped-building review, reversible mapper decisions, persistent local learning and
+the off-by-default shared-learning controlled test are now documented as the supported baseline.
+
 ## Building check
 
 Load a HOT task, show only its authorised imagery, select exactly one complete closed outline and keep the whole outline visible. Press **Analyse selected outline**. JOSM captures the visible area, performs the measurements locally and displays the result without requiring a questionnaire.
@@ -215,9 +267,22 @@ whose centres fall within that subsection. Its candidate list and mapped counts 
 explicitly partial rather than totals for the whole task. Both modes temporarily capture only the
 visible authorised imagery and propose roof-like regions for review.
 
+Choose a sensitivity before scanning. **Conservative** is recommended for new mappers and shows no
+more than eight of the strongest candidates. **Balanced** allows up to twelve moderately supported
+possibilities. **Exploratory** allows up to eighteen weaker possibilities and is intended for careful
+experienced review rather than routine mapping. The selected mode is stored in JOSM preferences.
+
 Mapped footprints are classified as rectangular/orthogonal, round or other using their tags and geometry. Possible unmapped candidates are found using local measurements of roof consistency, contrast, image boundaries, directional shadow and whether those signals form a rectangular or circular region. Candidates overlapping mapped building footprints are removed, and overlapping detections are merged.
 
-The results separate high-confidence rectangular and round candidates from uncertain candidates. Up to 16 candidates are shown as annotated thumbnails. Pressing a review button zooms JOSM to a padded close-up and draws a temporary labelled highlight over the candidate. **Hide candidate outline** removes only that temporary marker while preserving the close-up; **Show candidate outline** restores it. **Hide mapped building outlines** temporarily hides existing `building=*` objects through JOSM's filter model so the mapper can inspect the imagery underneath; **Show mapped building outlines** restores them and recalculates any filters the mapper already had enabled.
+The results separate high-confidence rectangular and round candidates from uncertain candidates.
+Each annotated thumbnail states why the proposal survived, such as coherent roof boundary,
+directional shadow, consistent interior texture or clear separation from its surroundings. Pressing
+a review button zooms JOSM to a padded close-up and draws a temporary labelled highlight over the
+candidate. **Hide candidate outline** removes only that temporary marker while preserving the
+close-up; **Show candidate outline** restores it. **Hide mapped building outlines** temporarily hides
+existing `building=*` objects through JOSM's filter model so the mapper can inspect the imagery
+underneath; **Show mapped building outlines** restores them and recalculates any filters the mapper
+already had enabled.
 
 Each entry under **Mapped buildings to review** also has **Show / hide review highlight**. This
 independently removes or restores the labelled review marker while preserving the close-up, so the
@@ -231,7 +296,14 @@ the learning observation and returns the item to active review.
 
 After review, **Reject** removes a false detection from the active list. Rejected candidates remain behind **Show rejected candidates** and can be restored. **Accept** moves a candidate to **Accepted — awaiting manual mapping**. **Map this building** returns to its close-up with the marker hidden so the mapper can use JOSM's normal Draw tool and trace the actual roof. **Check if mapped** looks for a complete closed way tagged `building=*` over the candidate centre and, when found, moves it to **Mapped during this review**. A mapped or rejected candidate can be restored if the classification was mistaken.
 
-Review decisions last until the task is rescanned or replaced. Navigation and checking do not create, reshape, tag, delete or upload an OSM object; all actual tracing remains a deliberate mapper action.
+After accepting, rejecting or mapping at least one candidate, **Rescan after review** returns to the
+same full-task or visible-area extent and omits those reviewed locations. This prevents the same
+slightly shifted proposal from immediately reappearing. Restoring a rejection before rescanning
+makes that location eligible again; a mapped candidate remains excluded by the downloaded/current
+building inventory. A normal scan clears the reviewed-location exclusions. The reviewed-location
+list lasts only for the current task session. Navigation and checking do not
+create, reshape, tag, delete or upload an OSM object; all actual tracing remains a deliberate mapper
+action.
 
 Confirmed mappings and rejections are also recorded as local learning examples. If a mapper draws a
 building that did not appear in the candidate list, **Learn from buildings drawn since scan** compares
@@ -249,13 +321,31 @@ that would represent implausibly small structures on the ground, while retaining
 for normal buildings. Any learned position or size adjustment is re-analysed before display so the
 highlight cannot be shifted from a scored roof-like region onto an unrelated neighbouring patch.
 
-The **Local learning** section is independent of the current HOT task. Its history stores project and
+The **Learning** section is independent of the current HOT task. Its local history stores project and
 task numbers, decision counts, last-seen HOT task status and aggregate image measurements on the
 mapper's computer. **Sync validation outcomes** checks those public task endpoints, so the mapper
-does not have to reopen a submitted task. Version 0.5.0 does not infer training labels from validator
-edits yet; that requires reliable association with uploaded OSM object IDs. The intended weighting is
-3 for unambiguous validator additions/replacements/reshapes, 1.5 negative for an unambiguous deletion
-with no replacement, 0.5 for an unchanged object and 0 for ambiguous edits.
+does not have to reopen a submitted task. Local learning does not infer object-level labels from
+validator edits until uploaded OSM object IDs can be associated reliably.
+
+## Shared learning controlled test
+
+Shared learning is separate from the local profile and is disabled by default. Enabling it displays
+a confirmation listing the data fields before any example can be queued. During the controlled test,
+examples are not transmitted automatically: the mapper must press **Send queued examples**. Sent
+examples remain quarantined and are listed locally as withdrawable. **Withdraw sent examples** uses
+a device-local random withdrawal token; the service stores only a keyed hash of that token.
+
+The service uses a random installation identifier to limit any one installation's influence and
+enforce submission limits. This identifier is not an OSM or HOT identity. The authorised-imagery
+description is converted locally into a short one-way SHA-256 identifier, preventing a custom URL or
+token from being included. No raw imagery, screenshot, geographic candidate location, mapped
+outline, task comment, instruction text, OSM username, email or authentication credential is sent.
+
+**Refresh shared profile** downloads the anonymous aggregate. An `insufficient_data` profile has no
+effect. An active schema-v1 profile can only make a small capped adjustment after local scoring;
+the scanner still rejects anything that fails its hard visual and scale gates. Disabling consent
+stops new examples from entering the local queue. It does not pretend that previously sent examples
+were erased; those remain visible for explicit withdrawal.
 
 The mapped inventory is exact only for complete, downloaded closed building ways whose centres fall inside the task boundary. Multipolygon buildings and data not currently downloaded are not included. The imagery result is an estimate from the currently rendered resolution, not a claim about the true number of buildings. Small, rotated, obscured or low-contrast roofs can be missed, while tanks, trees, bare ground and other bounded features can still be proposed for review.
 
@@ -307,6 +397,8 @@ The plugin retrieves the public project and individual task endpoints in the bac
 - Treat generated guidance as a review aid, not an authoritative mapping decision.
 - Treat the Building check as automated visual guidance for human review, not authoritative feature classification.
 - Treat reconnaissance candidates as a checklist of places to inspect, not objects to map automatically or a definitive building total.
+- Keep shared learning off unless the mapper has read and accepted the field-level disclosure.
+- Never let a shared aggregate bypass local hard scanner gates or expose individual contributions.
 - Do not poll the Tasking Manager continuously.
 
 ## Licence

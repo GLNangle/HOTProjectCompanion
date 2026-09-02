@@ -3,6 +3,7 @@ package org.openstreetmap.josm.plugins.hotprojectcompanion;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.Polygon;
+import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.util.Collections;
 
@@ -21,6 +22,8 @@ public final class BuildingCandidateScannerTest {
         assessesMappedOutlinesForReview();
         safelyAssessesOutlinesTouchingImageEdges();
         usesScaleAwareCandidateSizes();
+        appliesSensitivityModesPredictably();
+        excludesPreviouslyReviewedLocations();
         classifiesMappedFootprints();
         System.out.println("BuildingCandidateScannerTest: all tests passed");
     }
@@ -34,6 +37,46 @@ public final class BuildingCandidateScannerTest {
         int[] normalZoom = BuildingCandidateScanner.candidateSizes(0.50, 900);
         require(normalZoom[0] == 12,
                 "normal zoom retains small rural building templates");
+    }
+
+    private static void appliesSensitivityModesPredictably() {
+        BufferedImage image = scene();
+        Polygon boundary = rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4);
+        BuildingCandidateScanner.Result conservative = BuildingCandidateScanner.scan(image,
+                boundary, Collections.emptyList(), null, null, Double.NaN,
+                BuildingCandidateScanner.ScanMode.CONSERVATIVE, Collections.emptyList());
+        BuildingCandidateScanner.Result balanced = BuildingCandidateScanner.scan(image,
+                boundary, Collections.emptyList(), null, null, Double.NaN,
+                BuildingCandidateScanner.ScanMode.BALANCED, Collections.emptyList());
+        BuildingCandidateScanner.Result exploratory = BuildingCandidateScanner.scan(image,
+                boundary, Collections.emptyList(), null, null, Double.NaN,
+                BuildingCandidateScanner.ScanMode.EXPLORATORY, Collections.emptyList());
+        require(!conservative.getCandidates().isEmpty(),
+                "conservative mode retains strong synthetic roof evidence");
+        require(conservative.getCandidates().size() <= balanced.getCandidates().size(),
+                "balanced mode is no stricter than conservative mode");
+        require(balanced.getCandidates().size() <= exploratory.getCandidates().size(),
+                "exploratory mode is no stricter than balanced mode");
+        require(conservative.getCandidates().size() < exploratory.getCandidates().size(),
+                "conservative and exploratory modes produce meaningfully different review lists");
+        require(conservative.getCandidates().size() <= 8,
+                "conservative mode uses a short review list");
+        for (BuildingCandidateScanner.Candidate candidate : conservative.getCandidates()) {
+            require(candidate.explanation() != null && !candidate.explanation().isEmpty(),
+                    "retained candidates explain why they were shown");
+        }
+    }
+
+    private static void excludesPreviouslyReviewedLocations() {
+        BufferedImage image = scene();
+        BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
+                rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
+                Collections.emptyList(), null, null, Double.NaN,
+                BuildingCandidateScanner.ScanMode.BALANCED,
+                Collections.singletonList(new Rectangle(0, 0,
+                        image.getWidth(), image.getHeight())));
+        require(result.getCandidates().isEmpty(),
+                "reviewed regions are not proposed again during a rescan");
     }
 
     private static void detectsRectangularAndRoundRoofCandidates() {
