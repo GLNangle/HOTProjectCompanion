@@ -26,6 +26,7 @@ import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.Timer;
 
@@ -352,26 +353,11 @@ final class BuildingCheckPanel extends JPanel {
             throw new IllegalArgumentException("Keep the entire selected outline visible and zoom in enough to see it clearly, then try again.");
         }
         BufferedImage mapImage = new BufferedImage(mapView.getWidth(), mapView.getHeight(), BufferedImage.TYPE_INT_RGB);
-        List<Layer> hiddenForCapture = new ArrayList<>();
+        Graphics2D graphics = mapImage.createGraphics();
         try {
-            for (Layer layer : MainApplication.getLayerManager().getLayers()) {
-                if (layer.isVisible() && !isImageryLayer(layer)) {
-                    hiddenForCapture.add(layer);
-                    layer.setVisible(false);
-                }
-            }
-            Graphics2D graphics = mapImage.createGraphics();
-            try {
-                // printAll disables Swing double buffering for this render. paintAll
-                // can otherwise return the previous map frame on the first capture.
-                renderFreshMapView(mapView, graphics);
-            } finally {
-                graphics.dispose();
-            }
+            renderVisibleImagery(mapView, graphics, visibleImageryLayers());
         } finally {
-            for (Layer layer : hiddenForCapture) {
-                layer.setVisible(true);
-            }
+            graphics.dispose();
         }
         BufferedImage result = new BufferedImage(crop.width, crop.height, BufferedImage.TYPE_INT_RGB);
         Graphics2D copy = result.createGraphics();
@@ -391,25 +377,48 @@ final class BuildingCheckPanel extends JPanel {
     }
 
     /**
-     * Renders the current map into an off-screen graphics context.
+     * Renders only the currently visible imagery layers into an off-screen context.
      *
      * <p>A {@link BufferedImage} graphics context has no clip by default. JOSM's
-     * layer painter requires a non-null clip rectangle, so calling
-     * {@code MapView#printAll} without setting one can make JOSM's map renderer
-     * throw a {@link NullPointerException}.</p>
+     * layer painter requires a non-null clip rectangle, so the full map-view
+     * clip is installed before any imagery layer is painted.</p>
+     *
+     * <p>Painting each imagery layer directly avoids changing live layer
+     * visibility and avoids invoking {@link MapView#paintAll(java.awt.Graphics)}.
+     * Consequently the scan never writes to JOSM's live map buffers, which can
+     * otherwise leave a large black rectangle over the map.</p>
      *
      * @param mapView active JOSM map view
      * @param graphics target graphics context
-     * @throws IllegalArgumentException if JOSM cannot render the current frame
+     * @param imageryLayers visible imagery layers in JOSM z-order
+     * @throws IllegalArgumentException if JOSM cannot render the imagery
      */
-    static void renderFreshMapView(MapView mapView, Graphics2D graphics) {
+    static void renderVisibleImagery(MapView mapView, Graphics2D graphics,
+            List<Layer> imageryLayers) {
         graphics.setClip(0, 0, mapView.getWidth(), mapView.getHeight());
+        graphics.setColor(mapView.getBackground() == null ? Color.BLACK : mapView.getBackground());
+        graphics.fillRect(0, 0, mapView.getWidth(), mapView.getHeight());
         try {
-            mapView.printAll(graphics);
+            for (Layer layer : imageryLayers) {
+                mapView.paintLayer(layer, graphics);
+            }
         } catch (RuntimeException exception) {
             throw new IllegalArgumentException(
                     "JOSM was still preparing the map view. Wait a moment and try again.", exception);
         }
+    }
+
+    static List<Layer> visibleImageryLayers() {
+        List<Layer> imageryLayers = new ArrayList<>();
+        for (Layer layer : MainApplication.getLayerManager().getVisibleLayersInZOrder()) {
+            if (isImageryLayer(layer)) {
+                imageryLayers.add(layer);
+            }
+        }
+        if (imageryLayers.isEmpty()) {
+            throw new IllegalArgumentException("No visible imagery layer was found.");
+        }
+        return imageryLayers;
     }
 
     private static Polygon outlinePolygon(MapView mapView, Way way) {

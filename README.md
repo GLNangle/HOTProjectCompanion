@@ -8,7 +8,7 @@ Project page: https://github.com/GLNangle/HOTProjectCompanion
 
 ## Current release
 
-Version 1.0.0 provides:
+Version 1.0.3 provides:
 
 - a dockable **HOT Project Companion** sidebar in JOSM with independently collapsible sections whose states persist across restarts;
 - automatic project and task detection from the JOSM task-boundary layer;
@@ -234,6 +234,18 @@ Version 1.0.0 is the first stable public release. It promotes the tested v0.11.1
 changing scanner or learning behaviour: task guidance, local visual checks, task and visible-area
 reconnaissance, mapped-building review, reversible mapper decisions, persistent local learning and
 the off-by-default shared-learning controlled test are now documented as the supported baseline.
+
+Version 1.0.1 forces a complete map refresh after off-screen imagery capture, preventing a stale
+black capture-sized rectangle from remaining over the map until the mapper next interacts with it.
+
+Version 1.0.2 replaced Swing print-mode imagery capture with normal direct painting and controlled
+double buffering. This reduced capture interaction with Swing, although some full-task scans could
+still disturb the live map because the complete component was painted while layer visibility was
+temporarily changed.
+
+Version 1.0.3 paints only the visible authorised imagery layers into the temporary scan image. It
+does not hide or restore live layers, paint the complete map component, touch its display buffers or
+request a capture-related repaint, removing the remaining paths that could leave most of the map black.
 
 ## Building check
 

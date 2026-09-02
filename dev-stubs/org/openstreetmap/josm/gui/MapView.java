@@ -1,6 +1,7 @@
 package org.openstreetmap.josm.gui;
 
 import java.awt.Point;
+import java.awt.Graphics2D;
 
 import javax.swing.JComponent;
 
@@ -8,6 +9,7 @@ import org.openstreetmap.josm.data.osm.Node;
 import org.openstreetmap.josm.data.coor.EastNorth;
 import org.openstreetmap.josm.data.ProjectionBounds;
 import org.openstreetmap.josm.gui.layer.MapViewPaintable;
+import org.openstreetmap.josm.gui.layer.Layer;
 
 /** Compile-only JOSM API stub; never packaged. */
 public class MapView extends JComponent {
@@ -31,6 +33,10 @@ public class MapView extends JComponent {
 
     public double getDist100Pixel(boolean alwaysPositive) {
         return 100.0;
+    }
+
+    public void paintLayer(Layer layer, Graphics2D graphics) {
+        // Compile-only stub.
     }
 
     public void zoomTo(EastNorth location) {

@@ -873,26 +873,12 @@ final class TaskReconnaissancePanel extends JPanel {
 
         BufferedImage mapImage = new BufferedImage(mapView.getWidth(), mapView.getHeight(),
                 BufferedImage.TYPE_INT_RGB);
-        List<Layer> hidden = new ArrayList<>();
+        Graphics2D graphics = mapImage.createGraphics();
         try {
-            for (Layer layer : MainApplication.getLayerManager().getLayers()) {
-                if (layer.isVisible() && !BuildingCheckPanel.isImageryLayer(layer)) {
-                    hidden.add(layer);
-                    layer.setVisible(false);
-                }
-            }
-            Graphics2D graphics = mapImage.createGraphics();
-            try {
-                // Force the current imagery frame instead of reusing Swing's
-                // previous double-buffered map image.
-                BuildingCheckPanel.renderFreshMapView(mapView, graphics);
-            } finally {
-                graphics.dispose();
-            }
+            BuildingCheckPanel.renderVisibleImagery(mapView, graphics,
+                    BuildingCheckPanel.visibleImageryLayers());
         } finally {
-            for (Layer layer : hidden) {
-                layer.setVisible(true);
-            }
+            graphics.dispose();
         }
 
         BufferedImage image = new BufferedImage(crop.width, crop.height, BufferedImage.TYPE_INT_RGB);
