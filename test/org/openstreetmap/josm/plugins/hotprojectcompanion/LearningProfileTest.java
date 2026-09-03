@@ -1,5 +1,7 @@
 package org.openstreetmap.josm.plugins.hotprojectcompanion;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.EnumSet;
 import java.util.Map;
@@ -17,6 +19,8 @@ public final class LearningProfileTest {
         existingMappedReviewLearnsWithoutAwaitingValidation();
         legacyLearningMigratesIntoJosmPreferences();
         geometryEditsRoundTripAndCanBeReversed();
+        awaitingValidationRemainsSyncableForOneYear();
+        awaitingValidationHasItsOwnLargerHistoryAllowance();
         System.out.println("LearningProfileTest: all tests passed");
     }
 
@@ -154,6 +158,62 @@ public final class LearningProfileTest {
                         && new LearningStore(preferences).geometryProfile("EsriWorldImagery")
                                 .getMovedCount() == 0,
                 "restoring a review reverses its imagery-specific geometry measurement");
+    }
+
+    private static void awaitingValidationRemainsSyncableForOneYear() {
+        long now = Instant.now().getEpochSecond();
+        MemoryPreferences preferences = new MemoryPreferences();
+        preferences.put("hotprojectcompanion.learning.history-v1",
+                historyRecord(1, 1, "AWAITING VALIDATION",
+                        Instant.now().minus(180, ChronoUnit.DAYS).getEpochSecond()) + ";"
+                + historyRecord(1, 2, "AWAITING VALIDATION",
+                        Instant.now().minus(366, ChronoUnit.DAYS).getEpochSecond()) + ";"
+                + historyRecord(1, 3, "VALIDATED", now));
+
+        LearningStore store = new LearningStore(preferences);
+        require(store.recordsForSync().size() == 1,
+                "awaiting validation remains eligible for status sync for one year");
+        require(store.recordsForSync().get(0).getTask() == 1,
+                "expired and final task records are not polled");
+    }
+
+    private static void awaitingValidationHasItsOwnLargerHistoryAllowance() {
+        long now = Instant.now().getEpochSecond();
+        StringBuilder history = new StringBuilder();
+        for (int index = 0; index < 105; index++) {
+            appendHistory(history, historyRecord(2, index, "AWAITING VALIDATION", now - index));
+        }
+        for (int index = 0; index < 35; index++) {
+            appendHistory(history, historyRecord(3, index, "VALIDATED", now - index));
+        }
+        MemoryPreferences preferences = new MemoryPreferences();
+        preferences.put("hotprojectcompanion.learning.history-v1", history.toString());
+        LearningStore store = new LearningStore(preferences);
+        store.setTaskStatus(TaskReference.forHotTask(2, 0), "MAPPED");
+
+        int awaiting = 0;
+        int other = 0;
+        for (LearningStore.TaskRecord record : store.records()) {
+            if (record.getStatus().contains("AWAITING") || "MAPPED".equals(record.getStatus())
+                    || "LOCKED_FOR_VALIDATION".equals(record.getStatus())) {
+                awaiting++;
+            } else {
+                other++;
+            }
+        }
+        require(awaiting == 100, "up to 100 awaiting-validation tasks are retained");
+        require(other == 30, "completed and other task history remains capped separately");
+    }
+
+    private static String historyRecord(long project, long task, String status, long updated) {
+        return project + ":" + task + "|" + status + "|1|0|" + updated + "|0|0|0|0";
+    }
+
+    private static void appendHistory(StringBuilder history, String record) {
+        if (history.length() > 0) {
+            history.append(';');
+        }
+        history.append(record);
     }
 
     private static final class MemoryPreferences implements PluginPreferences.Store {

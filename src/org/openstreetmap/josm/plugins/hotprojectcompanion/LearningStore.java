@@ -19,7 +19,9 @@ final class LearningStore {
     private static final String MIGRATED = PluginPreferences.PREFIX + "learning.migrated-v1";
     private static final String LEGACY_PROFILE = "profile-v1";
     private static final String LEGACY_HISTORY = "history-v1";
-    private static final int MAX_TASKS = 30;
+    private static final int MAX_AWAITING_TASKS = 100;
+    private static final int MAX_OTHER_TASKS = 30;
+    private static final int AWAITING_RETENTION_DAYS = 365;
     private static final int MAX_EXAMPLES_PER_CLASS_PER_TASK = 20;
 
     private final PluginPreferences.Store preferences;
@@ -177,14 +179,11 @@ final class LearningStore {
     }
 
     synchronized List<TaskRecord> recordsForSync() {
-        long cutoff = Instant.now().minus(90, ChronoUnit.DAYS).getEpochSecond();
+        long cutoff = Instant.now().minus(AWAITING_RETENTION_DAYS, ChronoUnit.DAYS)
+                .getEpochSecond();
         List<TaskRecord> result = new ArrayList<>();
         for (TaskRecord record : records()) {
-            boolean finalState = "VALIDATED".equals(record.status)
-                    || "INVALIDATED".equals(record.status)
-                    || "BADIMAGERY".equals(record.status)
-                    || "SPLIT".equals(record.status);
-            if (!finalState && record.updated >= cutoff) {
+            if (!isFinalState(record) && record.updated >= cutoff) {
                 result.add(record);
             }
         }
@@ -194,8 +193,7 @@ final class LearningStore {
     synchronized int awaitingCount() {
         int count = 0;
         for (TaskRecord record : history.values()) {
-            if (record.status.contains("AWAITING") || "MAPPED".equals(record.status)
-                    || "LOCKED_FOR_VALIDATION".equals(record.status)) {
+            if (isAwaitingValidation(record)) {
                 count++;
             }
         }
@@ -217,13 +215,32 @@ final class LearningStore {
     }
 
     private void trimHistory() {
-        if (history.size() <= MAX_TASKS) {
-            return;
-        }
         List<TaskRecord> records = records();
-        for (int index = MAX_TASKS; index < records.size(); index++) {
-            history.remove(records.get(index).key());
+        int awaiting = 0;
+        int other = 0;
+        for (TaskRecord record : records) {
+            if (isAwaitingValidation(record)) {
+                awaiting++;
+                if (awaiting > MAX_AWAITING_TASKS) {
+                    history.remove(record.key());
+                }
+            } else {
+                other++;
+                if (other > MAX_OTHER_TASKS) {
+                    history.remove(record.key());
+                }
+            }
         }
+    }
+
+    private static boolean isAwaitingValidation(TaskRecord record) {
+        return record.status.contains("AWAITING") || "MAPPED".equals(record.status)
+                || "LOCKED_FOR_VALIDATION".equals(record.status);
+    }
+
+    private static boolean isFinalState(TaskRecord record) {
+        return "VALIDATED".equals(record.status) || "INVALIDATED".equals(record.status)
+                || "BADIMAGERY".equals(record.status) || "SPLIT".equals(record.status);
     }
 
     private static String key(TaskReference reference) {

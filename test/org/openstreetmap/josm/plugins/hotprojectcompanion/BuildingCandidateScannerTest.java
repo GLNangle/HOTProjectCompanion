@@ -22,6 +22,7 @@ public final class BuildingCandidateScannerTest {
         rejectsShadowedTexturedGroundPatch();
         rejectsRoadBandWithDarkEdge();
         rejectsVegetationPatch();
+        exploratoryRetainsOnlyStrongGreenRoofEvidence();
         assessesMappedOutlinesForReview();
         safelyAssessesOutlinesTouchingImageEdges();
         usesScaleAwareCandidateSizes();
@@ -236,6 +237,34 @@ public final class BuildingCandidateScannerTest {
                 Collections.emptyList());
         require(result.getCandidates().isEmpty(),
                 "a strongly green vegetation patch is rejected");
+    }
+
+    private static void exploratoryRetainsOnlyStrongGreenRoofEvidence() {
+        BufferedImage image = new BufferedImage(280, 230, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setColor(new Color(116, 126, 92));
+            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+            graphics.setColor(new Color(42, 58, 38));
+            graphics.fillRect(92, 91, 70, 51);
+            graphics.setColor(new Color(56, 174, 50));
+            graphics.fillRect(84, 82, 68, 49);
+        } finally {
+            graphics.dispose();
+        }
+        Polygon boundary = rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4);
+        BuildingCandidateScanner.Result balanced = BuildingCandidateScanner.scan(image,
+                boundary, Collections.emptyList(), null, null, Double.NaN,
+                BuildingCandidateScanner.ScanMode.BALANCED, Collections.emptyList());
+        BuildingCandidateScanner.Result exploratory = BuildingCandidateScanner.scan(image,
+                boundary, Collections.emptyList(), null, null, Double.NaN,
+                BuildingCandidateScanner.ScanMode.EXPLORATORY, Collections.emptyList());
+        require(balanced.getCandidates().isEmpty(),
+                "balanced mode keeps the conservative vegetation safeguard");
+        require(exploratory.getCandidates().stream().anyMatch(candidate ->
+                candidate.getShape() == BuildingCandidateScanner.Shape.RECTANGULAR
+                && candidate.getBounds().contains(116, 106)),
+                "exploratory mode can retain a crisp green roof with continuous edges and shadow");
     }
 
     private static void rejectsShadowedTexturedGroundPatch() {

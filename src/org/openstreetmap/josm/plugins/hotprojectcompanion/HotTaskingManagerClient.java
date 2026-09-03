@@ -46,7 +46,7 @@ final class HotTaskingManagerClient {
                 .timeout(Duration.ofSeconds(25))
                 .header("Accept", "application/json")
                 .header("Accept-Language", "en")
-                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.2")
+                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.6")
                 .GET()
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());

@@ -9,6 +9,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.text.Normalizer;
 
 /** Cautious local matching between mapper questions and loaded HOT guidance. */
 final class TaskQuestionAnswerer {
@@ -137,20 +138,67 @@ final class TaskQuestionAnswerer {
     }
 
     private static boolean isMappingOverviewQuestion(String question) {
-        String lower = question == null ? "" : question.trim().toLowerCase(Locale.ROOT)
-                .replaceAll("[^\\p{L}\\p{N}]+", " ").trim();
-        return lower.equals("what am i mapping")
-                || lower.equals("what are we mapping")
-                || lower.equals("what should i map")
-                || lower.equals("what should we map")
-                || lower.equals("what do i map")
-                || lower.equals("what do we map")
-                || lower.equals("what do i need to map")
-                || lower.equals("what do we need to map")
-                || lower.equals("what am i supposed to map")
-                || lower.equals("what are mappers mapping")
-                || lower.equals("what is this task asking me to map")
-                || lower.equals("what does this task ask me to map");
+        Set<String> terms = overviewTerms(question);
+        if (terms.isEmpty()) {
+            return false;
+        }
+        if (terms.contains("imagery") || terms.contains("image") || terms.contains("source")
+                || terms.contains("offset") || terms.contains("alignment")
+                || terms.contains("feedback") || terms.contains("comment")
+                || terms.contains("upload") || terms.contains("changeset")) {
+            return false;
+        }
+        boolean mapIntent = terms.contains("map");
+        boolean questionCue = terms.contains("what") || terms.contains("which")
+                || terms.contains("tell") || terms.contains("show")
+                || terms.contains("explain") || terms.contains("need")
+                || terms.contains("supposed") || terms.contains("required")
+                || terms.contains("target") || terms.contains("instruction")
+                || terms.contains("object") || terms.contains("thing")
+                || terms.contains("feature") || terms.contains("task");
+        if (mapIntent && (questionCue || terms.size() <= 3)) {
+            return true;
+        }
+        // Natural but incomplete English often omits "map", for example
+        // "what do I do here?" or "what this task wants?".
+        boolean broadActionQuestion = terms.contains("what")
+                && (terms.contains("do") || terms.contains("need") || terms.contains("want"))
+                && (terms.contains("here") || terms.contains("task") || terms.size() <= 4);
+        return broadActionQuestion;
+    }
+
+    private static Set<String> overviewTerms(String question) {
+        if (question == null) {
+            return Collections.emptySet();
+        }
+        String normalised = Normalizer.normalize(question.toLowerCase(Locale.ROOT),
+                Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
+        Set<String> result = new LinkedHashSet<>();
+        for (String raw : normalised.split("[^\\p{L}\\p{N}]+")) {
+            if (raw.isEmpty()) {
+                continue;
+            }
+            String term = raw;
+            if (term.equals("wat") || term.equals("wht") || term.equals("whats")) {
+                term = "what";
+            } else if (term.equals("wich")) {
+                term = "which";
+            } else if (term.startsWith("map") || term.equals("trace") || term.equals("tracing")) {
+                term = "map";
+            } else if (term.equals("objects")) {
+                term = "object";
+            } else if (term.equals("things")) {
+                term = "thing";
+            } else if (term.equals("features")) {
+                term = "feature";
+            } else if (term.startsWith("instruct")) {
+                term = "instruction";
+            } else if (term.equals("wants") || term.equals("wanted")) {
+                term = "want";
+            }
+            result.add(term);
+        }
+        return result;
     }
 
     private static Answer mappingOverview(TaskContext context) {

@@ -71,6 +71,27 @@ public final class TaskQuestionAnswererTest {
         TaskQuestionAnswerer.Answer alternateOverview = TaskQuestionAnswerer.answer(overview,
                 "What do I need to map?");
         requireEquals(overviewAnswer.getSummary(), alternateOverview.getSummary());
+
+        String[] accessibleOverviewQuestions = {
+            "What I need map?",
+            "Which things are mapped?",
+            "Mapping target?",
+            "Tell me the mapping instructions",
+            "Wat am I maping?",
+            "What should be mapped here?",
+            "What do I do here?",
+            "What this task wants?"
+        };
+        for (String accessibleQuestion : accessibleOverviewQuestions) {
+            TaskQuestionAnswerer.Answer accessibleAnswer = TaskQuestionAnswerer.answer(
+                    overview, accessibleQuestion);
+            requireOutcome(TaskQuestionAnswerer.Outcome.RELATED, accessibleAnswer);
+            requireEquals(overviewAnswer.getSummary(), accessibleAnswer.getSummary());
+        }
+
+        TaskQuestionAnswerer.Answer specificImagery = TaskQuestionAnswerer.answer(overview,
+                "What imagery am I mapping with?");
+        requireEquals("Authorised imagery: Esri World Imagery", specificImagery.getSummary());
         System.out.println("TaskQuestionAnswererTest: all tests passed");
     }
 

@@ -14,7 +14,10 @@ public final class SharedLearningTest {
         queueNeverStoresRawImageryLabels();
         geometryFlagsCanBeUpdatedBeforeSubmission();
         submittedExamplesRemainWithdrawable();
+        selectedSubmittedExamplesCanBeWithdrawnIndependently();
         requestContainsOnlyApprovedFields();
+        scoreDiagnosticsRoundTripForQualityEvaluation();
+        legacyQueuedExamplesStillLoad();
         aggregateInfluenceIsInactiveUntilThresholdsAreMetAndAlwaysCapped();
         System.out.println("SharedLearningTest: all tests passed");
     }
@@ -79,21 +82,74 @@ public final class SharedLearningTest {
         require(store.sent().isEmpty(), "withdrawn receipt is removed locally");
     }
 
+    private static void selectedSubmittedExamplesCanBeWithdrawnIndependently() {
+        MemoryPreferences preferences = new MemoryPreferences();
+        SharedLearningStore store = new SharedLearningStore(preferences);
+        store.setEnabled(true);
+        String first = store.queue(TaskReference.forHotTask(12, 34), evidence(), false,
+                BuildingCandidateScanner.Shape.RECTANGULAR, "imagery");
+        String second = store.queue(TaskReference.forHotTask(12, 35), evidence(), true,
+                BuildingCandidateScanner.Shape.ROUND, "imagery");
+        String firstReceipt = "1111111111111111111111111111111111111111";
+        String secondReceipt = "2222222222222222222222222222222222222222";
+        Map<String, String> receipts = new HashMap<>();
+        receipts.put(first, firstReceipt);
+        receipts.put(second, secondReceipt);
+        store.markSent(receipts);
+        store.markWithdrawn(List.of(firstReceipt));
+        require(store.sent().size() == 1
+                && secondReceipt.equals(store.sent().get(0).getServiceId()),
+                "one selected receipt can be withdrawn without removing other sent examples");
+    }
+
     private static void requestContainsOnlyApprovedFields() {
         MemoryPreferences preferences = new MemoryPreferences();
         SharedLearningStore store = new SharedLearningStore(preferences);
         store.setEnabled(true);
         store.queue(TaskReference.forHotTask(12, 34), evidence(), false,
-                BuildingCandidateScanner.Shape.ROUND, "Private imagery URL");
+                BuildingCandidateScanner.Shape.ROUND, "Private imagery URL", 64, 59,
+                BuildingCandidateScanner.ScanMode.BALANCED);
         String json = SharedLearningClient.requestBody(store.queued(),
                 "installation-identifier-000001", "withdrawal-token-000000000000000001");
         Object parsed = MiniJson.parse(json);
         require(parsed instanceof Map, "submission is valid JSON");
         require(json.contains("\"projectId\":12") && json.contains("\"taskId\":34"),
                 "task association is included");
+        require(json.contains("\"originalScore\":0.64")
+                        && json.contains("\"preSharedScore\":0.59")
+                        && json.contains("\"scanMode\":\"balanced\""),
+                "privacy-safe scoring diagnostics are included for holdout evaluation");
         require(!json.contains("Private imagery URL") && !json.contains("latitude")
                 && !json.contains("comment") && !json.contains("username"),
                 "request excludes raw imagery, coordinates, comments and identity");
+    }
+
+    private static void scoreDiagnosticsRoundTripForQualityEvaluation() {
+        MemoryPreferences preferences = new MemoryPreferences();
+        SharedLearningStore store = new SharedLearningStore(preferences);
+        store.setEnabled(true);
+        store.queue(TaskReference.forHotTask(88, 99), evidence(), true,
+                BuildingCandidateScanner.Shape.L_SHAPED, "imagery", 57, 61,
+                BuildingCandidateScanner.ScanMode.EXPLORATORY);
+        SharedLearningStore.Example restored = new SharedLearningStore(preferences)
+                .queued().get(0);
+        require(restored.getBaselineConfidence() == 57
+                        && restored.getPreSharedConfidence() == 61
+                        && "exploratory".equals(restored.getScanMode()),
+                "original, pre-shared and scan-mode diagnostics persist locally");
+    }
+
+    private static void legacyQueuedExamplesStillLoad() {
+        MemoryPreferences preferences = new MemoryPreferences();
+        preferences.put("hotprojectcompanion.shared.examples-v1",
+                "event-old||12|34|1700000000|sha256-old|building|rectangular"
+                + "|0.8|0.6|0.7|0.5|0.8|0|0|0|0|QUEUED");
+        SharedLearningStore.Example restored = new SharedLearningStore(preferences)
+                .queued().get(0);
+        require(restored.getBaselineConfidence() == -1
+                        && restored.getPreSharedConfidence() == -1
+                        && "unknown".equals(restored.getScanMode()),
+                "pre-v1.3.5 queued examples remain readable without invented scores");
     }
 
     private static void aggregateInfluenceIsInactiveUntilThresholdsAreMetAndAlwaysCapped() {

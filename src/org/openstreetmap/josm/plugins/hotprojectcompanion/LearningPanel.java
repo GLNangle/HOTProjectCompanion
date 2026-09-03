@@ -10,6 +10,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 
 import javax.swing.BorderFactory;
@@ -21,8 +22,10 @@ import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.SwingWorker;
+import javax.swing.table.DefaultTableModel;
 
 /** Persistent learning summary and task-status synchronisation controls. */
 final class LearningPanel extends JPanel {
@@ -122,15 +125,34 @@ final class LearningPanel extends JPanel {
         String profileText = shared.isActive()
                 ? "active profile v" + shared.getVersion() + " · "
                         + shared.getContributorCount() + " contributors · "
-                        + shared.getSampleCount() + " validated samples"
+                        + shared.getSampleCount() + " validated training samples"
                 : "profile " + shared.getStatus().replace('_', ' ');
+        String qualityText = qualityText(shared);
         sharedSummary.setText("<html><div style='width:300px'>"
                 + queued.size() + " queued locally · " + sent.size()
                 + " sent and withdrawable<br>Shared " + profileText
+                + (qualityText.isEmpty() ? "" : "<br>" + qualityText)
                 + "</div></html>");
         shareOptIn.setSelected(sharedStore.isEnabled());
         sendButton.setEnabled(sharedStore.isEnabled() && !queued.isEmpty());
         withdrawButton.setEnabled(!sent.isEmpty());
+    }
+
+    private static String qualityText(SharedLearningProfile profile) {
+        String status = profile.getQualityStatus();
+        if ("passed".equals(status) && Double.isFinite(profile.getBaselineBrierScore())
+                && Double.isFinite(profile.getProposedBrierScore())) {
+            return "Quality passed on " + profile.getHoldoutSampleCount()
+                    + " unseen examples · error "
+                    + String.format(Locale.ROOT, "%.3f", profile.getBaselineBrierScore())
+                    + " → "
+                    + String.format(Locale.ROOT, "%.3f", profile.getProposedBrierScore());
+        }
+        if (status.startsWith("waiting")) {
+            return "Quality gate waiting for more unseen validated examples ("
+                    + profile.getHoldoutSampleCount() + " so far)";
+        }
+        return "";
     }
 
     private void changeConsent() {
@@ -142,7 +164,8 @@ final class LearningPanel extends JPanel {
             JTextArea consent = new JTextArea(
                     "This controlled test shares only project/task numbers, decision time, "
                     + "a hashed imagery identifier, building/not-building decision, shape, "
-                    + "five numeric visual measurements and selected geometry-correction flags.\n\n"
+                    + "scan mode, original and locally adjusted scores, five numeric visual "
+                    + "measurements and selected geometry-correction flags.\n\n"
                     + "It never sends imagery pixels, candidate coordinates, comments, mapper "
                     + "names or OSM login details. Examples remain quarantined until dated "
                     + "Tasking Manager validation evidence is available.\n\nContinue?",
@@ -246,34 +269,52 @@ final class LearningPanel extends JPanel {
         if (sent.isEmpty()) {
             return;
         }
-        int choice = JOptionPane.showConfirmDialog(this,
-                "Withdraw all " + sent.size() + " retained shared example(s)?",
-                tr("Withdraw shared examples"), JOptionPane.YES_NO_OPTION,
-                JOptionPane.WARNING_MESSAGE);
-        if (choice != JOptionPane.YES_OPTION) {
+        List<SharedLearningStore.Example> selected = chooseWithdrawalExamples(sent);
+        if (selected.isEmpty()) {
+            setSharedState("No sent examples were selected for withdrawal.",
+                    new Color(90, 90, 90));
             return;
         }
         setSharedButtonsEnabled(false);
-        setSharedState("Withdrawing sent examples…", new Color(0, 90, 145));
-        new SwingWorker<List<String>, Void>() {
+        setSharedState("Withdrawing " + selected.size() + " selected example(s)…",
+                new Color(0, 90, 145));
+        new SwingWorker<WithdrawalResult, Void>() {
             @Override
-            protected List<String> doInBackground() throws Exception {
+            protected WithdrawalResult doInBackground() {
                 List<String> withdrawn = new ArrayList<>();
-                for (SharedLearningStore.Example example : sent) {
-                    sharedClient.withdraw(example.getServiceId(), sharedStore.withdrawalToken());
-                    withdrawn.add(example.getServiceId());
+                int failed = 0;
+                String failure = "";
+                for (SharedLearningStore.Example example : selected) {
+                    try {
+                        sharedClient.withdraw(example.getServiceId(),
+                                sharedStore.withdrawalToken());
+                        withdrawn.add(example.getServiceId());
+                    } catch (Exception exception) {
+                        failed++;
+                        if (failure.isEmpty() && exception.getMessage() != null) {
+                            failure = exception.getMessage();
+                        }
+                    }
                 }
-                return withdrawn;
+                return new WithdrawalResult(withdrawn, failed, failure);
             }
 
             @Override
             protected void done() {
                 setSharedButtonsEnabled(true);
                 try {
-                    List<String> withdrawn = get();
-                    sharedStore.markWithdrawn(withdrawn);
-                    setSharedState(withdrawn.size() + " shared example(s) withdrawn.",
-                            new Color(0, 105, 45));
+                    WithdrawalResult result = get();
+                    sharedStore.markWithdrawn(result.withdrawn);
+                    if (result.failed == 0) {
+                        setSharedState(result.withdrawn.size()
+                                + " selected shared example(s) withdrawn.",
+                                new Color(0, 105, 45));
+                    } else {
+                        String detail = result.failure.isEmpty() ? "" : ": " + result.failure;
+                        setSharedState(result.withdrawn.size() + " withdrawn; "
+                                + result.failed + " could not be withdrawn" + detail,
+                                new Color(170, 80, 0));
+                    }
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
                     setSharedState("Withdrawal was interrupted.", new Color(170, 35, 35));
@@ -286,6 +327,89 @@ final class LearningPanel extends JPanel {
         }.execute();
     }
 
+    private List<SharedLearningStore.Example> chooseWithdrawalExamples(
+            List<SharedLearningStore.Example> sent) {
+        DefaultTableModel model = new DefaultTableModel(
+                new Object[] {"Withdraw", "Project", "Task", "Decision", "Decision date"}, 0) {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public Class<?> getColumnClass(int column) {
+                return column == 0 ? Boolean.class : String.class;
+            }
+
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return column == 0;
+            }
+        };
+        for (SharedLearningStore.Example example : sent) {
+            model.addRow(new Object[] {Boolean.FALSE,
+                    Long.toString(example.getProjectId()),
+                    Long.toString(example.getTaskId()),
+                    example.getDecision().replace('_', ' '),
+                    DATE.format(Instant.ofEpochSecond(example.getAttemptEpoch()))});
+        }
+        JTable table = new JTable(model);
+        table.setFillsViewportHeight(true);
+        table.getColumnModel().getColumn(0).setPreferredWidth(68);
+        table.getColumnModel().getColumn(1).setPreferredWidth(65);
+        table.getColumnModel().getColumn(2).setPreferredWidth(55);
+        table.getColumnModel().getColumn(3).setPreferredWidth(100);
+        table.getColumnModel().getColumn(4).setPreferredWidth(105);
+
+        JButton selectAll = SidebarButtons.create(tr("Select all"));
+        selectAll.addActionListener(event -> {
+            for (int row = 0; row < model.getRowCount(); row++) {
+                model.setValueAt(Boolean.TRUE, row, 0);
+            }
+        });
+        JButton clear = SidebarButtons.create(tr("Clear"));
+        clear.addActionListener(event -> {
+            for (int row = 0; row < model.getRowCount(); row++) {
+                model.setValueAt(Boolean.FALSE, row, 0);
+            }
+        });
+        JPanel selectionButtons = new JPanel();
+        selectionButtons.add(selectAll);
+        selectionButtons.add(clear);
+
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.add(new JLabel(tr("Tick only the sent examples you want to withdraw.")));
+        panel.add(Box.createVerticalStrut(5));
+        JScrollPane scroll = new JScrollPane(table);
+        scroll.setPreferredSize(new Dimension(560, Math.min(300,
+                48 + sent.size() * table.getRowHeight())));
+        panel.add(scroll);
+        panel.add(selectionButtons);
+        int choice = JOptionPane.showConfirmDialog(this, panel,
+                tr("Choose shared examples to withdraw"), JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) {
+            return java.util.Collections.emptyList();
+        }
+        List<SharedLearningStore.Example> selected = new ArrayList<>();
+        for (int row = 0; row < model.getRowCount(); row++) {
+            if (Boolean.TRUE.equals(model.getValueAt(row, 0))) {
+                selected.add(sent.get(row));
+            }
+        }
+        return selected;
+    }
+
+    private static final class WithdrawalResult {
+        private final List<String> withdrawn;
+        private final int failed;
+        private final String failure;
+
+        WithdrawalResult(List<String> withdrawn, int failed, String failure) {
+            this.withdrawn = withdrawn;
+            this.failed = failed;
+            this.failure = failure;
+        }
+    }
+
     private void showPrivacyDetails() {
         JTextArea details = new JTextArea(
                 "SHARED\n"
@@ -293,6 +417,7 @@ final class LearningPanel extends JPanel {
                 + "• decision time\n"
                 + "• one-way hashed imagery identifier\n"
                 + "• building/not-building and rectangular/round/unknown decision\n"
+                + "• scan mode and original/locally adjusted numeric scores\n"
                 + "• five numeric visual measurements\n"
                 + "• moved/rotated/reshaped/resized flags\n\n"
                 + "NEVER SHARED\n"

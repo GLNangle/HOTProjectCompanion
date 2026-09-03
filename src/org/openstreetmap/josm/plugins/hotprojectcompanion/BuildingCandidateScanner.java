@@ -175,10 +175,10 @@ final class BuildingCandidateScanner {
                 for (LCorner corner : LCorner.values()) {
                     ScoredEvidence measurement = lShapeConfidence(integral, box, corner, mode,
                             armFractionX, armFractionY);
-                    double confidence = learningProfile == null ? measurement.score
+                    double localConfidence = learningProfile == null ? measurement.score
                             : learningProfile.adjust(measurement.score, measurement.evidence);
-                    confidence = sharedProfile == null ? confidence
-                            : sharedProfile.adjust(confidence, measurement.evidence);
+                    double confidence = sharedProfile == null ? localConfidence
+                            : sharedProfile.adjust(localConfidence, measurement.evidence);
                     int score = percent(confidence);
                     boolean flexibleTemplate = width != height
                             || Math.abs(armFractionX - 0.50) > 0.01
@@ -188,7 +188,8 @@ final class BuildingCandidateScanner {
                             && percent(measurement.score)
                                     >= mode.minimumBaseline + templateMargin) {
                         proposals.add(new Candidate(Shape.L_SHAPED, score,
-                                percent(measurement.score), box, measurement.evidence, corner,
+                                percent(measurement.score), percent(localConfidence), box,
+                                measurement.evidence, corner,
                                 armFractionX, armFractionY));
                     }
                 }
@@ -273,15 +274,16 @@ final class BuildingCandidateScanner {
                         measurement = adjusted;
                     }
                 }
-                double confidence = learningProfile == null ? measurement.score
+                double localConfidence = learningProfile == null ? measurement.score
                         : learningProfile.adjust(measurement.score, measurement.evidence);
-                confidence = sharedProfile == null ? confidence
-                        : sharedProfile.adjust(confidence, measurement.evidence);
+                double confidence = sharedProfile == null ? localConfidence
+                        : sharedProfile.adjust(localConfidence, measurement.evidence);
                 int score = percent(confidence);
                 if (score >= mode.minimumConfidence
                         && percent(measurement.score) >= mode.minimumBaseline) {
                     proposals.add(new Candidate(Shape.RECTANGULAR, score,
-                            percent(measurement.score), displayBox, measurement.evidence));
+                            percent(measurement.score), percent(localConfidence), displayBox,
+                            measurement.evidence));
                 }
             }
         }
@@ -313,15 +315,16 @@ final class BuildingCandidateScanner {
                         measurement = adjusted;
                     }
                 }
-                double confidence = learningProfile == null ? measurement.score
+                double localConfidence = learningProfile == null ? measurement.score
                         : learningProfile.adjust(measurement.score, measurement.evidence);
-                confidence = sharedProfile == null ? confidence
-                        : sharedProfile.adjust(confidence, measurement.evidence);
+                double confidence = sharedProfile == null ? localConfidence
+                        : sharedProfile.adjust(localConfidence, measurement.evidence);
                 int score = percent(confidence);
                 if (score >= mode.minimumConfidence
                         && percent(measurement.score) >= mode.minimumBaseline) {
                     proposals.add(new Candidate(Shape.ROUND, score,
-                            percent(measurement.score), displayBox, measurement.evidence));
+                            percent(measurement.score), percent(localConfidence), displayBox,
+                            measurement.evidence));
                 }
             }
         }
@@ -386,8 +389,20 @@ final class BuildingCandidateScanner {
         double[] sides = sideMeans(image, box, paddingX, paddingY);
         double shadow = shadowCue(insideMean, sides);
         boolean vegetation = strongVegetation(image, inside);
+        double colourEdgeCoverage = vegetation ? rectangleColourEdgeCoverage(image, box) : 0;
+        boolean greenRoof = vegetation && strongGreenRoofEvidence(mode, consistency,
+                contrast, shadow, colourEdgeCoverage);
+        if (greenRoof) {
+            // Green roofs can have weak luminance contrast even when their colour boundary
+            // is crisp. This alternate path remains restricted to Exploratory mode and
+            // still requires continuous edges, a uniform interior and a strong shadow.
+            boundary = Math.max(boundary, colourEdgeCoverage * 0.62);
+            geometry = Math.max(geometry, colourEdgeCoverage * 0.58);
+            edgeBalance = Math.max(edgeBalance, colourEdgeCoverage);
+            edgeCoverage = Math.max(edgeCoverage, colourEdgeCoverage);
+        }
         Evidence evidence = new Evidence(consistency, contrast, boundary, shadow, geometry);
-        if (vegetation || consistency < mode.minimumConsistency
+        if ((vegetation && !greenRoof) || consistency < mode.minimumConsistency
                 || contrast < mode.minimumContrast || boundary < mode.minimumBoundary
                 || edgeBalance < mode.minimumEdgeBalance
                 || edgeCoverage < mode.minimumEdgeCoverage
@@ -462,7 +477,7 @@ final class BuildingCandidateScanner {
         double contrast = clamp((notchContrast * 0.65 + outsideContrast * 0.35) / 52.0);
         boolean vegetation = strongVegetation(image, vertical)
                 || strongVegetation(image, horizontal);
-        if (vegetation || wingDifference > 18
+        if (wingDifference > 18
                 || notchContrast < (mode == ScanMode.EXPLORATORY ? 12 : 16)
                 || consistency < mode.minimumConsistency || contrast < mode.minimumContrast) {
             return new ScoredEvidence(0,
@@ -475,7 +490,7 @@ final class BuildingCandidateScanner {
                 * Math.sqrt(innerEdgeCoverage) * clamp(notchContrast / 42.0);
         double shadow = shadowCue(roofMean, sideMeans(image, box, padding, padding));
         Evidence evidence = new Evidence(consistency, contrast, boundary, shadow, geometry);
-        if (boundary < mode.minimumBoundary
+        if (vegetation || boundary < mode.minimumBoundary
                 || edgeCoverage < mode.minimumEdgeCoverage
                 || innerEdgeCoverage < (mode == ScanMode.CONSERVATIVE ? 0.68
                         : mode == ScanMode.BALANCED ? 0.56 : 0.42)
@@ -484,11 +499,21 @@ final class BuildingCandidateScanner {
                         * (mode == ScanMode.EXPLORATORY ? 1.0 : 0.50)) {
             return new ScoredEvidence(0, evidence);
         }
-        // The concave corner is highly specific evidence, while an L-shaped roof's
+        // The concave corner is highly specific evidence, while a right-angled
+        // irregular roof's
         // shadow is often split across two wings. Weight its six-edge geometry more
         // heavily than the rectangle detector weights a single shadow band.
         return new ScoredEvidence(clamp(consistency * 0.14 + contrast * 0.24
                 + boundary * 0.20 + shadow * 0.16 + geometry * 0.26), evidence);
+    }
+
+    private static boolean strongGreenRoofEvidence(ScanMode mode, double consistency,
+            double contrast, double shadow, double colourEdgeCoverage) {
+        return mode == ScanMode.EXPLORATORY
+                && consistency >= 0.74
+                && contrast >= 0.30
+                && shadow >= 0.42
+                && colourEdgeCoverage >= 0.72;
     }
 
     private static int sizeOf(Rectangle box) {
@@ -694,6 +719,22 @@ final class BuildingCandidateScanner {
         return covered / (double) total;
     }
 
+    private static double rectangleColourEdgeCoverage(IntegralImage image, Rectangle box) {
+        int samples = Math.max(8, Math.min(28, Math.max(box.width, box.height)));
+        int covered = 0;
+        int total = samples * 4;
+        for (int index = 0; index < samples; index++) {
+            double fraction = (index + 0.5) / samples;
+            int x = box.x + (int) Math.round(fraction * box.width);
+            int y = box.y + (int) Math.round(fraction * box.height);
+            if (maxColourGradient(image, x, box.y, false) >= 18) covered++;
+            if (maxColourGradient(image, x, box.y + box.height, false) >= 18) covered++;
+            if (maxColourGradient(image, box.x, y, true) >= 18) covered++;
+            if (maxColourGradient(image, box.x + box.width, y, true) >= 18) covered++;
+        }
+        return covered / (double) total;
+    }
+
     private static double circleEdgeCoverage(IntegralImage image, double centreX,
             double centreY, double radius) {
         int samples = 36;
@@ -722,6 +763,17 @@ final class BuildingCandidateScanner {
             strongest = Math.max(strongest, horizontalNormal
                     ? image.gradient(x + offset, y)
                     : image.gradient(x, y + offset));
+        }
+        return strongest;
+    }
+
+    private static double maxColourGradient(IntegralImage image, int x, int y,
+            boolean horizontalNormal) {
+        double strongest = 0;
+        for (int offset = -2; offset <= 2; offset++) {
+            strongest = Math.max(strongest, horizontalNormal
+                    ? image.colourGradient(x + offset, y)
+                    : image.colourGradient(x, y + offset));
         }
         return strongest;
     }
@@ -926,6 +978,7 @@ final class BuildingCandidateScanner {
         private final Shape shape;
         private final int confidence;
         private final int baselineConfidence;
+        private final int localConfidence;
         private final Rectangle bounds;
         private final Evidence evidence;
         private final LCorner lCorner;
@@ -934,20 +987,30 @@ final class BuildingCandidateScanner {
 
         Candidate(Shape shape, int confidence, int baselineConfidence, Rectangle bounds,
                 Evidence evidence) {
-            this(shape, confidence, baselineConfidence, bounds, evidence, null, 0.50, 0.50);
+            this(shape, confidence, baselineConfidence, confidence, bounds, evidence, null,
+                    0.50, 0.50);
         }
 
         Candidate(Shape shape, int confidence, int baselineConfidence, Rectangle bounds,
                 Evidence evidence, LCorner lCorner) {
-            this(shape, confidence, baselineConfidence, bounds, evidence, lCorner, 0.50, 0.50);
+            this(shape, confidence, baselineConfidence, confidence, bounds, evidence, lCorner,
+                    0.50, 0.50);
         }
 
-        Candidate(Shape shape, int confidence, int baselineConfidence, Rectangle bounds,
+        Candidate(Shape shape, int confidence, int baselineConfidence, int localConfidence,
+                Rectangle bounds, Evidence evidence) {
+            this(shape, confidence, baselineConfidence, localConfidence, bounds, evidence, null,
+                    0.50, 0.50);
+        }
+
+        Candidate(Shape shape, int confidence, int baselineConfidence, int localConfidence,
+                Rectangle bounds,
                 Evidence evidence, LCorner lCorner, double armFractionX,
                 double armFractionY) {
             this.shape = shape;
             this.confidence = confidence;
             this.baselineConfidence = baselineConfidence;
+            this.localConfidence = localConfidence;
             this.bounds = new Rectangle(bounds);
             this.evidence = evidence;
             this.lCorner = lCorner;
@@ -958,6 +1021,7 @@ final class BuildingCandidateScanner {
         Shape getShape() { return shape; }
         int getConfidence() { return confidence; }
         int getBaselineConfidence() { return baselineConfidence; }
+        int getLocalConfidence() { return localConfidence; }
         Rectangle getBounds() { return new Rectangle(bounds); }
         Evidence getEvidence() { return evidence; }
         LCorner getLCorner() { return lCorner; }
@@ -1060,6 +1124,7 @@ final class BuildingCandidateScanner {
         private final int height;
         private final double[] values;
         private final double[] gradients;
+        private final double[] colourGradients;
         private final double[] sum;
         private final double[] sumSquares;
         private final double[] gradientSum;
@@ -1072,6 +1137,7 @@ final class BuildingCandidateScanner {
             height = image.getHeight();
             values = new double[width * height];
             gradients = new double[width * height];
+            colourGradients = new double[width * height];
             double[] reds = new double[width * height];
             double[] greens = new double[width * height];
             double[] blues = new double[width * height];
@@ -1091,6 +1157,21 @@ final class BuildingCandidateScanner {
                     double horizontal = values[y * width + x + 1] - values[y * width + x - 1];
                     double vertical = values[(y + 1) * width + x] - values[(y - 1) * width + x];
                     gradients[y * width + x] = Math.hypot(horizontal, vertical) / 2.0;
+                    int index = y * width + x;
+                    int left = index - 1;
+                    int right = index + 1;
+                    int up = index - width;
+                    int down = index + width;
+                    double horizontalColour = Math.sqrt(
+                            square(reds[right] - reds[left])
+                            + square(greens[right] - greens[left])
+                            + square(blues[right] - blues[left])) / 2.0;
+                    double verticalColour = Math.sqrt(
+                            square(reds[down] - reds[up])
+                            + square(greens[down] - greens[up])
+                            + square(blues[down] - blues[up])) / 2.0;
+                    colourGradients[index] = Math.hypot(horizontalColour,
+                            verticalColour) / Math.sqrt(2.0);
                 }
             }
             sum = integral(values, false);
@@ -1111,6 +1192,16 @@ final class BuildingCandidateScanner {
             int safeX = Math.max(0, Math.min(width - 1, x));
             int safeY = Math.max(0, Math.min(height - 1, y));
             return gradients[safeY * width + safeX];
+        }
+
+        double colourGradient(int x, int y) {
+            int safeX = Math.max(0, Math.min(width - 1, x));
+            int safeY = Math.max(0, Math.min(height - 1, y));
+            return colourGradients[safeY * width + safeX];
+        }
+
+        private static double square(double value) {
+            return value * value;
         }
 
         double redMean(Rectangle rectangle) { return channelMean(redSum, rectangle); }

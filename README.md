@@ -8,7 +8,7 @@ Project page: https://github.com/GLNangle/HOTProjectCompanion
 
 ## Current release
 
-Version 1.3.2 provides:
+Version 1.3.6 provides:
 
 - a dockable **HOT Project Companion** sidebar in JOSM with independently collapsible sections whose states persist across restarts;
 - a dismissible first-use tip explaining that JOSM's pin icon can detach the companion into a separate, resizable window;
@@ -23,7 +23,7 @@ Version 1.3.2 provides:
 - an explicit reminder that only project-authorised imagery will be considered.
 - a local **Ask about this task** field that answers with the conclusion first, quotes only the
   single best matching instruction and says plainly when the available wording does not answer the
-  question;
+  question, with intent-based recognition of short, imperfect and commonly misspelled English;
 - a local, automatic **Building check** for one selected closed outline, using a captured view of the currently visible project-authorised imagery;
 - automatic measurements of roof consistency, contrast with the surroundings, visible boundary strength and directional shadow evidence;
 - footprint shape shown only as a diagnostic, never as evidence that the imagery contains a building;
@@ -44,7 +44,7 @@ Version 1.3.2 provides:
 - a neutral **Outside my area** outcome for boundary-cut or partial items, which hides the location
   from later scans without recording a positive or negative learning example;
 - exact counts of downloaded closed building ways classified as rectangular/orthogonal, round or other;
-- conservative estimates of possible unmapped rectangular, round, L-shaped and uncertain candidates from the rendered authorised imagery;
+- conservative estimates of possible unmapped rectangular, round, right-angled irregular and uncertain candidates from the rendered authorised imagery; the irregular category is not limited to a literal letter L, but describes non-rectangular footprints made mainly from right-angled corners;
 - a review checklist with annotated thumbnails and adaptive, centred close-ups calculated from
   each candidate's real map dimensions rather than the zoom used for the scan;
 - persistent **Closer**, **Wider** and **Reset** review controls with seven fine-grained zoom positions;
@@ -64,14 +64,16 @@ Version 1.3.2 provides:
 - a **Local learning** summary and history window that remain available after the mapper leaves a task;
 - **Sync validation outcomes**, which checks the saved project/task numbers against HOT without
   requiring the submitted task to be reopened;
+- one-year status checking and a separate 100-task allowance for work still awaiting validation,
+  so slow validation queues are not displaced by the shorter completed-task history;
 - an off-by-default **Shared learning — controlled test** with explicit consent, a local queue,
-  manual submission, retained withdrawal receipts and a plain-language disclosure of every field;
+  manual submission, retained withdrawal receipts, selective per-example withdrawal and a plain-language disclosure of every field;
 - anonymous contribution of project/task numbers, decision time, a one-way imagery identifier,
   building decision, shape, numeric visual evidence and selected geometry-correction flags;
 - no shared imagery pixels, screenshots, candidate coordinates, geometry, comments, mapper names,
   OSM usernames, email addresses or login credentials;
 - download of a thresholded multi-mapper aggregate which remains inactive until the service has
-  enough validated examples from at least five contributors, and whose client-side influence is
+  enough validated examples from at least two contributors, and whose client-side influence is
   capped below the scanner's local hard safety gates.
 
 It does **not** use an AI image classifier, claim a statistical probability, move imagery, modify
@@ -327,6 +329,33 @@ Exploratory mode, L-shaped detection now tests rectangular footprints and unequa
 well as the original square 50/50 template, while retaining stronger evidence requirements for
 these more flexible shapes.
 
+Version 1.3.3 relabels the former L-shaped result as **right-angled irregular** to make clear that the
+category is not restricted to a perfect letter L. Exploratory mode can now retain a strongly
+vegetation-coloured rectangular roof only when it also has a highly consistent interior, continuous
+colour edges and convincing directional shadow evidence; Conservative and Balanced retain the
+existing vegetation safeguard. **Withdraw sent examples** now opens a selectable project/task list
+instead of withdrawing every retained example, and records successful withdrawals even when a later
+selection cannot be withdrawn.
+
+Version 1.3.4 keeps tasks awaiting validation eligible for status checks for one year instead of 90
+days. It retains up to 100 awaiting-validation tasks separately from the existing 30-record allowance
+for completed and other task history, so delayed validation does not cause pending work to be crowded
+out. Existing stored records use the same format and require no migration or reset.
+
+Version 1.3.5 adds transparent original, local and shared score diagnostics to candidate reviews and
+submits those privacy-safe numeric diagnostics with the selected scan mode when shared learning is
+enabled. The service evaluates proposed aggregate profiles on held-back validated tasks and publishes
+one only when it reduces scoring error without increasing false positives or reducing accuracy. For
+the open trial, training requires at least two contributors and 10 approved samples; with exactly
+two contributors, equal weighting requires at least five eligible training samples from each. A
+separate held-back sample remains mandatory before the aggregate is published.
+
+Version 1.3.6 replaces exact-phrase recognition for broad mapping questions with a tolerant local
+intent check. It recognises shorter or grammatically incomplete questions, common spelling variants
+and requests for mapping targets or instructions, while keeping imagery, feedback and upload
+questions routed to their specific guidance. Answers remain grounded entirely in the loaded HOT
+instructions and no question text leaves JOSM.
+
 ## Building check
 
 Load a HOT task, show only its authorised imagery, select exactly one complete closed outline and keep the whole outline visible. Press **Analyse selected outline**. JOSM captures the visible area, performs the measurements locally and displays the result without requiring a questionnaire.
@@ -439,8 +468,10 @@ validator edits until uploaded OSM object IDs can be associated reliably.
 Shared learning is separate from the local profile and is disabled by default. Enabling it displays
 a confirmation listing the data fields before any example can be queued. During the controlled test,
 examples are not transmitted automatically: the mapper must press **Send queued examples**. Sent
-examples remain quarantined and are listed locally as withdrawable. **Withdraw sent examples** uses
-a device-local random withdrawal token; the service stores only a keyed hash of that token.
+examples remain quarantined and are listed locally as withdrawable. **Withdraw sent examples** opens
+a selectable list showing project, task, decision and date, so the mapper can withdraw individual
+examples or deliberately select all. Withdrawal uses a device-local random token; the service stores
+only a keyed hash of that token.
 
 The service uses a random installation identifier to limit any one installation's influence and
 enforce submission limits. This identifier is not an OSM or HOT identity. The authorised-imagery

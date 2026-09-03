@@ -116,7 +116,11 @@ final class TaskReconnaissancePanel extends JPanel {
         setAlignmentX(Component.LEFT_ALIGNMENT);
         setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
 
-        add(wrappingLabel("Count downloaded mapped buildings and estimate possible unmapped rectangular, round and L-shaped candidates from the visible authorised imagery."));
+        add(wrappingLabel("Count downloaded mapped buildings and estimate possible unmapped rectangular, round and right-angled irregular candidates from the visible authorised imagery."));
+        add(Box.createVerticalStrut(3));
+        JLabel irregularHelp = wrappingLabel("Right-angled irregular is broader than a literal L: it means a non-rectangular footprint made mainly from right-angled corners.");
+        irregularHelp.setForeground(new Color(80, 80, 80));
+        add(irregularHelp);
         add(Box.createVerticalStrut(6));
         JLabel modeLabel = new JLabel(tr("Scan sensitivity:"));
         modeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -377,7 +381,7 @@ final class TaskReconnaissancePanel extends JPanel {
             return "Recommended for most tasks. Shows a moderate number of reasonably supported possibilities.";
         }
         if (mode == BuildingCandidateScanner.ScanMode.EXPLORATORY) {
-            return "Includes weaker, uncertain candidates. Expect more non-buildings and review every candidate carefully. A highlight does not confirm that a building exists.";
+            return "Includes weaker, uncertain candidates and a tightly gated green-roof check. Expect more non-buildings and review every candidate carefully. A highlight does not confirm that a building exists.";
         }
         return "Shows the fewest, strongest candidates. Best for avoiding obvious non-buildings, but subtle buildings may be missed.";
     }
@@ -541,6 +545,12 @@ final class TaskReconnaissancePanel extends JPanel {
         evidenceLabel.setForeground(new Color(80, 80, 80));
         details.add(evidenceLabel);
 
+        JLabel scoreLabel = wrappingLabel(scoreBreakdown(candidate));
+        scoreLabel.setForeground(new Color(65, 80, 105));
+        scoreLabel.setToolTipText(tr(
+                "Original imagery score, followed by local and anonymous shared-learning adjustments."));
+        details.add(scoreLabel);
+
         JLabel decisionLabel = new JLabel(tr("Decision: not reviewed"));
         decisionLabel.setForeground(new Color(95, 95, 95));
         decisionLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -594,7 +604,8 @@ final class TaskReconnaissancePanel extends JPanel {
         CandidateReviewItem item = new CandidateReviewItem(candidateNumber, candidate.getShape(),
                 candidate.getLCorner(), candidate.getArmFractionX(), candidate.getArmFractionY(),
                 candidateArea,
-                candidate.getEvidence(), row, decisionLabel, decisions, accept,
+                candidate.getEvidence(), candidate.getBaselineConfidence(),
+                candidate.getLocalConfidence(), row, decisionLabel, decisions, accept,
                 reject, outsideArea, map, checkMapped, restore, geometryEdits);
         geometryEdits.setSaveAction(() -> saveGeometryEdits(item.geometryEdits));
         return item;
@@ -701,7 +712,7 @@ final class TaskReconnaissancePanel extends JPanel {
         details.add(restore);
         row.add(details);
         MappedReviewItem item = new MappedReviewItem(number, concern.shape, concern.evidence,
-                mappedArea, row, decisionLabel, decisions, confirm, notBuilding,
+                concern.score, mappedArea, row, decisionLabel, decisions, confirm, notBuilding,
                 outsideArea, restore, geometryEdits);
         geometryEdits.measurementProvider = () -> GeometryMeasurement.betweenWays(
                 concern.originalGeometry, concern.way);
@@ -754,13 +765,15 @@ final class TaskReconnaissancePanel extends JPanel {
             return;
         }
         boolean building = decision == MappedReviewDecision.CONFIRMED_BUILDING;
+        int localConfidence = localScore(item.baselineConfidence, item.evidence);
         if (!building) {
             clearGeometryEdits(item.geometryEdits);
         }
         item.learningRecorded = learningStore.observe(reference, item.evidence,
                 building, 1.0, 1, false);
         if (item.learningRecorded) {
-            item.sharedEventId = queueShared(item.evidence, building, item.shape);
+            item.sharedEventId = queueShared(item.evidence, building, item.shape,
+                    item.baselineConfidence, localConfidence);
             item.geometryEdits.sharedEventId = item.sharedEventId;
         }
         learningChanged.run();
@@ -1041,9 +1054,9 @@ final class TaskReconnaissancePanel extends JPanel {
         BuildingCandidateScanner.Result result = displayedResult;
         int highRectangular = result.count(BuildingCandidateScanner.Shape.RECTANGULAR, true);
         int highRound = result.count(BuildingCandidateScanner.Shape.ROUND, true);
-        int highLShaped = result.count(BuildingCandidateScanner.Shape.L_SHAPED, true);
+        int highIrregular = result.count(BuildingCandidateScanner.Shape.L_SHAPED, true);
         int uncertain = result.getCandidates().size()
-                - highRectangular - highRound - highLShaped;
+                - highRectangular - highRound - highIrregular;
         String scopeLabel = capture.scope == ScanScope.VISIBLE_AREA
                 ? "Visible-area scan — counts below cover only the displayed part of the task."
                 : "Complete-task scan.";
@@ -1058,8 +1071,8 @@ final class TaskReconnaissancePanel extends JPanel {
                 + mappedReviewCount(MappedReviewDecision.NOT_A_BUILDING) + " marked not a building, "
                 + mappedReviewCount(MappedReviewDecision.OUTSIDE_AREA) + " outside area.<br>"
                 + "<b>Possible unmapped candidates:</b> " + highRectangular
-                + " rectangular, " + highRound + " round, " + highLShaped
-                + " L-shaped, " + uncertain
+                + " rectangular, " + highRound + " round, " + highIrregular
+                + " right-angled irregular, " + uncertain
                 + " uncertain.<br><b>Review decisions:</b> "
                 + reviewDecisions.count(CandidateReviewDecisions.Decision.ACCEPTED) + " awaiting mapping, "
                 + reviewDecisions.count(CandidateReviewDecisions.Decision.MAPPED) + " mapped, "
@@ -1164,7 +1177,8 @@ final class TaskReconnaissancePanel extends JPanel {
             item.negativeLearned = learningStore.observe(reference, item.evidence,
                     false, 1.0, 1);
             if (item.negativeLearned) {
-                item.sharedEventId = queueShared(item.evidence, false, item.shape);
+                item.sharedEventId = queueShared(item.evidence, false, item.shape,
+                        item.baselineConfidence, item.localConfidence);
             }
             learningChanged.run();
         }
@@ -1271,7 +1285,8 @@ final class TaskReconnaissancePanel extends JPanel {
         item.positiveLearned = learningStore.observe(reference, item.evidence,
                 true, 1.0, 1);
         if (item.positiveLearned) {
-            item.sharedEventId = queueShared(item.evidence, true, item.shape);
+            item.sharedEventId = queueShared(item.evidence, true, item.shape,
+                    item.baselineConfidence, item.localConfidence);
             item.geometryEdits.sharedEventId = item.sharedEventId;
         }
         learnedBuildingWays.add(foundWay);
@@ -1562,18 +1577,21 @@ final class TaskReconnaissancePanel extends JPanel {
                 BuildingCandidateScanner.Shape shape = classified == BuildingShapeClassifier.Shape.ROUND
                         ? BuildingCandidateScanner.Shape.ROUND
                         : BuildingCandidateScanner.Shape.RECTANGULAR;
-                BuildingCandidateScanner.Evidence evidence;
+                BuildingCandidateScanner.Assessment assessment;
                 try {
-                    evidence = BuildingCandidateScanner.evidenceFor(
-                            fresh.image, shape, local.getBounds());
+                    assessment = BuildingCandidateScanner.assess(
+                            fresh.image, shape, local.getBounds(), selectedScanMode());
                 } catch (IllegalArgumentException | IndexOutOfBoundsException exception) {
                     // One partly visible or otherwise unusable outline must not
                     // abort learning from every other newly drawn building.
                     continue;
                 }
-                if (evidence != null) {
+                if (assessment != null) {
+                    BuildingCandidateScanner.Evidence evidence = assessment.getEvidence();
+                    int localConfidence = localScore(assessment.getScore(), evidence);
                     if (learningStore.observe(reference, evidence, true, 1.5, 1)) {
-                        queueShared(evidence, true, shape);
+                        queueShared(evidence, true, shape, assessment.getScore(),
+                                localConfidence);
                         learnedBuildingWays.add(way);
                         learned++;
                     }
@@ -1768,7 +1786,7 @@ final class TaskReconnaissancePanel extends JPanel {
             return "round";
         }
         return shape == BuildingCandidateScanner.Shape.L_SHAPED
-                ? "L-shaped" : "rectangular";
+                ? "right-angled" : "rectangular";
     }
 
     private static Polygon lShapePolygon(int x, int y, int width, int height,
@@ -1912,9 +1930,29 @@ final class TaskReconnaissancePanel extends JPanel {
     }
 
     private String queueShared(BuildingCandidateScanner.Evidence evidence, boolean building,
-            BuildingCandidateScanner.Shape shape) {
+            BuildingCandidateScanner.Shape shape, int baselineConfidence,
+            int localConfidence) {
         String imagery = context == null ? "" : context.getAuthorisedImagery();
-        return sharedLearningStore.queue(reference, evidence, building, shape, imagery);
+        return sharedLearningStore.queue(reference, evidence, building, shape, imagery,
+                baselineConfidence, localConfidence, selectedScanMode());
+    }
+
+    private int localScore(int baselineConfidence,
+            BuildingCandidateScanner.Evidence evidence) {
+        return (int) Math.round(learningStore.profile().adjust(
+                baselineConfidence / 100.0, evidence) * 100.0);
+    }
+
+    private static String scoreBreakdown(BuildingCandidateScanner.Candidate candidate) {
+        int baseline = candidate.getBaselineConfidence();
+        int local = candidate.getLocalConfidence();
+        int shared = candidate.getConfidence();
+        return "Score: original " + baseline + " · local " + signed(local - baseline)
+                + " → " + local + " · shared " + signed(shared - local) + " → " + shared;
+    }
+
+    private static String signed(int value) {
+        return value > 0 ? "+" + value : Integer.toString(value);
     }
 
     private static String escapeHtml(String value) {
@@ -1974,6 +2012,8 @@ final class TaskReconnaissancePanel extends JPanel {
         private final double armFractionY;
         private final ProjectionBounds candidateArea;
         private final BuildingCandidateScanner.Evidence evidence;
+        private final int baselineConfidence;
+        private final int localConfidence;
         private final JPanel row;
         private final JLabel decisionLabel;
         private final JPanel decisionButtons;
@@ -1992,7 +2032,8 @@ final class TaskReconnaissancePanel extends JPanel {
         CandidateReviewItem(int candidateNumber, BuildingCandidateScanner.Shape shape,
                 BuildingCandidateScanner.LCorner lCorner, double armFractionX,
                 double armFractionY, ProjectionBounds candidateArea,
-                BuildingCandidateScanner.Evidence evidence, JPanel row,
+                BuildingCandidateScanner.Evidence evidence, int baselineConfidence,
+                int localConfidence, JPanel row,
                 JLabel decisionLabel, JPanel decisionButtons, JButton accept, JButton reject,
                 JButton outsideArea, JButton map, JButton checkMapped, JButton restore,
                 GeometryEditControls geometryEdits) {
@@ -2003,6 +2044,8 @@ final class TaskReconnaissancePanel extends JPanel {
             this.armFractionY = armFractionY;
             this.candidateArea = candidateArea;
             this.evidence = evidence;
+            this.baselineConfidence = baselineConfidence;
+            this.localConfidence = localConfidence;
             this.row = row;
             this.decisionLabel = decisionLabel;
             this.decisionButtons = decisionButtons;
@@ -2027,6 +2070,7 @@ final class TaskReconnaissancePanel extends JPanel {
         private final int number;
         private final BuildingCandidateScanner.Shape shape;
         private final BuildingCandidateScanner.Evidence evidence;
+        private final int baselineConfidence;
         private final ProjectionBounds mappedArea;
         private final JPanel row;
         private final JLabel decisionLabel;
@@ -2042,7 +2086,8 @@ final class TaskReconnaissancePanel extends JPanel {
         private String sharedEventId;
 
         MappedReviewItem(int number, BuildingCandidateScanner.Shape shape,
-                BuildingCandidateScanner.Evidence evidence, ProjectionBounds mappedArea,
+                BuildingCandidateScanner.Evidence evidence, int baselineConfidence,
+                ProjectionBounds mappedArea,
                 JPanel row, JLabel decisionLabel,
                 JPanel decisionButtons, JButton confirm,
                 JButton notBuilding, JButton outsideArea, JButton restore,
@@ -2050,6 +2095,7 @@ final class TaskReconnaissancePanel extends JPanel {
             this.number = number;
             this.shape = shape;
             this.evidence = evidence;
+            this.baselineConfidence = baselineConfidence;
             this.mappedArea = mappedArea;
             this.row = row;
             this.decisionLabel = decisionLabel;

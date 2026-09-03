@@ -33,7 +33,7 @@ final class SharedLearningClient {
                 .timeout(Duration.ofSeconds(30))
                 .header("Accept", "application/json")
                 .header("Content-Type", "application/json")
-                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.2")
+                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.6")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         HttpResponse<String> response = httpClient.send(request,
@@ -49,7 +49,7 @@ final class SharedLearningClient {
         HttpRequest request = HttpRequest.newBuilder(URI.create(SERVICE_ROOT + "profile"))
                 .timeout(Duration.ofSeconds(25))
                 .header("Accept", "application/json")
-                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.2")
+                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.6")
                 .GET()
                 .build();
         HttpResponse<String> response = httpClient.send(request,
@@ -72,7 +72,7 @@ final class SharedLearningClient {
                 .timeout(Duration.ofSeconds(25))
                 .header("Accept", "application/json")
                 .header("X-Withdrawal-Token", withdrawalToken)
-                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.2")
+                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.6")
                 .DELETE()
                 .build();
         HttpResponse<String> response = httpClient.send(request,
@@ -103,8 +103,18 @@ final class SharedLearningClient {
                     .append(Instant.ofEpochSecond(example.getAttemptEpoch()))
                     .append("\",\"imageryKey\":\"").append(escape(example.getImageryKey()))
                     .append("\",\"decision\":\"").append(escape(example.getDecision()))
-                    .append("\",\"shape\":\"").append(escape(example.getShape()))
-                    .append("\",\"evidence\":{")
+                    .append("\",\"shape\":\"").append(escape(example.getShape())).append('"');
+            if (example.getBaselineConfidence() >= 0
+                    && example.getPreSharedConfidence() >= 0
+                    && !"unknown".equals(example.getScanMode())) {
+                json.append(",\"originalScore\":")
+                        .append(example.getBaselineConfidence() / 100.0)
+                        .append(",\"preSharedScore\":")
+                        .append(example.getPreSharedConfidence() / 100.0)
+                        .append(",\"scanMode\":\"")
+                        .append(escape(example.getScanMode())).append('"');
+            }
+            json.append(",\"evidence\":{")
                     .append("\"consistency\":").append(feature[0]).append(',')
                     .append("\"contrast\":").append(feature[1]).append(',')
                     .append("\"boundary\":").append(feature[2]).append(',')

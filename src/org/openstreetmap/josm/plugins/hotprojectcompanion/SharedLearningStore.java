@@ -47,6 +47,13 @@ final class SharedLearningStore {
 
     synchronized String queue(TaskReference reference, BuildingCandidateScanner.Evidence evidence,
             boolean building, BuildingCandidateScanner.Shape shape, String imagery) {
+        return queue(reference, evidence, building, shape, imagery, -1, -1, null);
+    }
+
+    synchronized String queue(TaskReference reference, BuildingCandidateScanner.Evidence evidence,
+            boolean building, BuildingCandidateScanner.Shape shape, String imagery,
+            int baselineConfidence, int preSharedConfidence,
+            BuildingCandidateScanner.ScanMode scanMode) {
         if (!isEnabled() || reference == null || evidence == null || examples.size() >= MAX_EXAMPLES) {
             return null;
         }
@@ -57,7 +64,10 @@ final class SharedLearningStore {
                 shape == BuildingCandidateScanner.Shape.ROUND ? "round"
                         : shape == BuildingCandidateScanner.Shape.RECTANGULAR
                                 ? "rectangular" : "unknown",
-                evidence.values(), GeometryEditOutcome.none(), State.QUEUED));
+                evidence.values(), Math.max(-1, Math.min(100, baselineConfidence)),
+                Math.max(-1, Math.min(100, preSharedConfidence)),
+                scanMode == null ? "unknown" : scanMode.name().toLowerCase(),
+                GeometryEditOutcome.none(), State.QUEUED));
         saveExamples();
         return eventId;
     }
@@ -198,6 +208,9 @@ final class SharedLearningStore {
             for (double feature : value.features) {
                 text.append('|').append(feature);
             }
+            text.append('|').append(value.baselineConfidence)
+                    .append('|').append(value.preSharedConfidence)
+                    .append('|').append(value.scanMode);
             text.append('|').append(value.edits.contains(GeometryEditOutcome.MOVED) ? 1 : 0)
                     .append('|').append(value.edits.contains(GeometryEditOutcome.ROTATED) ? 1 : 0)
                     .append('|').append(value.edits.contains(GeometryEditOutcome.RESHAPED) ? 1 : 0)
@@ -214,7 +227,7 @@ final class SharedLearningStore {
         }
         for (String row : encoded.split(";")) {
             String[] field = row.split("\\|", -1);
-            if (field.length != 18) {
+            if (field.length != 18 && field.length != 21) {
                 continue;
             }
             try {
@@ -223,13 +236,21 @@ final class SharedLearningStore {
                     features[index] = Double.parseDouble(field[8 + index]);
                 }
                 EnumSet<GeometryEditOutcome> edits = GeometryEditOutcome.none();
-                if ("1".equals(field[13])) edits.add(GeometryEditOutcome.MOVED);
-                if ("1".equals(field[14])) edits.add(GeometryEditOutcome.ROTATED);
-                if ("1".equals(field[15])) edits.add(GeometryEditOutcome.RESHAPED);
-                if ("1".equals(field[16])) edits.add(GeometryEditOutcome.RESIZED);
+                int editOffset = field.length == 21 ? 16 : 13;
+                int baselineConfidence = field.length == 21
+                        ? Integer.parseInt(field[13]) : -1;
+                int preSharedConfidence = field.length == 21
+                        ? Integer.parseInt(field[14]) : -1;
+                String scanMode = field.length == 21 ? field[15] : "unknown";
+                if ("1".equals(field[editOffset])) edits.add(GeometryEditOutcome.MOVED);
+                if ("1".equals(field[editOffset + 1])) edits.add(GeometryEditOutcome.ROTATED);
+                if ("1".equals(field[editOffset + 2])) edits.add(GeometryEditOutcome.RESHAPED);
+                if ("1".equals(field[editOffset + 3])) edits.add(GeometryEditOutcome.RESIZED);
                 result.add(new Example(field[0], field[1], Long.parseLong(field[2]),
                         Long.parseLong(field[3]), Long.parseLong(field[4]), field[5], field[6],
-                        field[7], features, edits, State.valueOf(field[17])));
+                        field[7], features, baselineConfidence, preSharedConfidence,
+                        scanMode, edits,
+                        State.valueOf(field[editOffset + 4])));
             } catch (IllegalArgumentException exception) {
                 // Ignore one damaged local queue entry without losing the rest.
             }
@@ -249,12 +270,17 @@ final class SharedLearningStore {
         private final String decision;
         private final String shape;
         private final double[] features;
+        private final int baselineConfidence;
+        private final int preSharedConfidence;
+        private final String scanMode;
         private EnumSet<GeometryEditOutcome> edits;
         private State state;
 
         Example(String eventId, String serviceId, long projectId, long taskId,
                 long attemptEpoch, String imageryKey, String decision, String shape,
-                double[] features, EnumSet<GeometryEditOutcome> edits, State state) {
+                double[] features, int baselineConfidence, int preSharedConfidence,
+                String scanMode,
+                EnumSet<GeometryEditOutcome> edits, State state) {
             this.eventId = eventId;
             this.serviceId = serviceId;
             this.projectId = projectId;
@@ -264,13 +290,18 @@ final class SharedLearningStore {
             this.decision = decision;
             this.shape = shape;
             this.features = features.clone();
+            this.baselineConfidence = baselineConfidence;
+            this.preSharedConfidence = preSharedConfidence;
+            this.scanMode = scanMode;
             this.edits = EnumSet.copyOf(edits);
             this.state = state;
         }
 
         Example copy() {
             return new Example(eventId, serviceId, projectId, taskId, attemptEpoch,
-                    imageryKey, decision, shape, features, edits, state);
+                    imageryKey, decision, shape, features, baselineConfidence,
+                    preSharedConfidence, scanMode,
+                    edits, state);
         }
 
         String getEventId() { return eventId; }
@@ -282,6 +313,9 @@ final class SharedLearningStore {
         String getDecision() { return decision; }
         String getShape() { return shape; }
         double[] getFeatures() { return features.clone(); }
+        int getBaselineConfidence() { return baselineConfidence; }
+        int getPreSharedConfidence() { return preSharedConfidence; }
+        String getScanMode() { return scanMode; }
         EnumSet<GeometryEditOutcome> getEdits() { return EnumSet.copyOf(edits); }
     }
 }

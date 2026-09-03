@@ -17,19 +17,30 @@ final class SharedLearningProfile {
     private final int sampleCount;
     private final double[] positiveMeans;
     private final double[] negativeMeans;
+    private final String qualityStatus;
+    private final int holdoutSampleCount;
+    private final double baselineBrierScore;
+    private final double proposedBrierScore;
 
     private SharedLearningProfile(int version, String status, int contributorCount,
-            int sampleCount, double[] positiveMeans, double[] negativeMeans) {
+            int sampleCount, double[] positiveMeans, double[] negativeMeans,
+            String qualityStatus, int holdoutSampleCount, double baselineBrierScore,
+            double proposedBrierScore) {
         this.version = Math.max(0, version);
         this.status = status == null ? "unavailable" : status;
         this.contributorCount = Math.max(0, contributorCount);
         this.sampleCount = Math.max(0, sampleCount);
         this.positiveMeans = positiveMeans;
         this.negativeMeans = negativeMeans;
+        this.qualityStatus = qualityStatus == null ? "" : qualityStatus;
+        this.holdoutSampleCount = Math.max(0, holdoutSampleCount);
+        this.baselineBrierScore = baselineBrierScore;
+        this.proposedBrierScore = proposedBrierScore;
     }
 
     static SharedLearningProfile unavailable() {
-        return new SharedLearningProfile(0, "unavailable", 0, 0, null, null);
+        return new SharedLearningProfile(0, "unavailable", 0, 0, null, null,
+                "", 0, Double.NaN, Double.NaN);
     }
 
     static SharedLearningProfile parse(String json) {
@@ -44,20 +55,30 @@ final class SharedLearningProfile {
             String status = text(profile.get("status"));
             int contributors = integer(profile.get("contributorCount"));
             int samples = integer(profile.get("sampleCount"));
+            Map<?, ?> quality = optionalMap(profile.get("qualityGate"));
+            String qualityStatus = text(quality.get("status"));
+            int holdout = integer(quality.get("holdoutSampleCount"));
+            Map<?, ?> baselineMetrics = optionalMap(quality.get("baseline"));
+            Map<?, ?> proposedMetrics = optionalMap(quality.get("proposed"));
+            double baselineBrier = number(baselineMetrics.get("brierScore"));
+            double proposedBrier = number(proposedMetrics.get("brierScore"));
             if (schemaVersion != 1 || !"active".equals(status)) {
                 return new SharedLearningProfile(version,
                         status.isEmpty() ? "unavailable" : status,
-                        contributors, samples, null, null);
+                        contributors, samples, null, null, qualityStatus, holdout,
+                        baselineBrier, proposedBrier);
             }
             Map<?, ?> learning = map(profile.get("learning"));
             double[] positive = means(map(learning.get("positiveMeans")));
             double[] negative = means(map(learning.get("negativeMeans")));
             if (positive == null || negative == null) {
                 return new SharedLearningProfile(version, "unavailable",
-                        contributors, samples, null, null);
+                        contributors, samples, null, null, qualityStatus, holdout,
+                        baselineBrier, proposedBrier);
             }
             return new SharedLearningProfile(version, status, contributors, samples,
-                    positive, negative);
+                    positive, negative, qualityStatus, holdout, baselineBrier,
+                    proposedBrier);
         } catch (IllegalArgumentException | ClassCastException exception) {
             return unavailable();
         }
@@ -86,6 +107,10 @@ final class SharedLearningProfile {
     String getStatus() { return status; }
     int getContributorCount() { return contributorCount; }
     int getSampleCount() { return sampleCount; }
+    String getQualityStatus() { return qualityStatus; }
+    int getHoldoutSampleCount() { return holdoutSampleCount; }
+    double getBaselineBrierScore() { return baselineBrierScore; }
+    double getProposedBrierScore() { return proposedBrierScore; }
 
     private static double[] means(Map<?, ?> values) {
         String[] names = {"consistency", "contrast", "boundary", "shadow", "geometry"};
@@ -117,6 +142,14 @@ final class SharedLearningProfile {
             return (Map<?, ?>) value;
         }
         throw new IllegalArgumentException("Expected a JSON object");
+    }
+
+    private static Map<?, ?> optionalMap(Object value) {
+        return value instanceof Map ? (Map<?, ?>) value : java.util.Collections.emptyMap();
+    }
+
+    private static double number(Object value) {
+        return value instanceof Number ? ((Number) value).doubleValue() : Double.NaN;
     }
 
     private static int integer(Object value) {
