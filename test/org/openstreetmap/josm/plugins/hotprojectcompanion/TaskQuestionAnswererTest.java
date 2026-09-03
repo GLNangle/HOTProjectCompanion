@@ -12,33 +12,65 @@ public final class TaskQuestionAnswererTest {
                 "Map all visible buildings. Map buildings under construction as building=construction.",
                 "Authorised imagery: Esri World Imagery",
                 "No previous task comments were returned.");
-        requireOutcome(TaskQuestionAnswerer.Outcome.YES,
-                TaskQuestionAnswerer.answer(allowed,
-                        "Should I map buildings under construction?"));
+        TaskQuestionAnswerer.Answer allowedAnswer = TaskQuestionAnswerer.answer(allowed,
+                "Should I map buildings under construction?");
+        requireOutcome(TaskQuestionAnswerer.Outcome.YES, allowedAnswer);
+        requireEquals("Yes. Map buildings under construction as building=construction.",
+                allowedAnswer.getSummary());
+        requireEquals(1, allowedAnswer.getEvidence().size());
 
         TaskContext excluded = context(
                 "Map completed buildings. Do not map buildings under construction.",
                 "Authorised imagery: Esri World Imagery",
                 "No previous task comments were returned.");
-        requireOutcome(TaskQuestionAnswerer.Outcome.NO,
-                TaskQuestionAnswerer.answer(excluded,
-                        "Should I map buildings under construction?"));
+        TaskQuestionAnswerer.Answer excludedAnswer = TaskQuestionAnswerer.answer(excluded,
+                "Should I map buildings under construction?");
+        requireOutcome(TaskQuestionAnswerer.Outcome.NO, excludedAnswer);
+        requireEquals("No. Do not map buildings under construction.",
+                excludedAnswer.getSummary());
+
+        TaskContext mixedClause = context(
+                "Do not map temporary roads, but map buildings under construction as building=construction.",
+                "Authorised imagery: Esri World Imagery",
+                "No previous task comments were returned.");
+        TaskQuestionAnswerer.Answer mixedAnswer = TaskQuestionAnswerer.answer(mixedClause,
+                "Should I map buildings under construction?");
+        requireOutcome(TaskQuestionAnswerer.Outcome.YES, mixedAnswer);
+        requireEquals("Yes. Map buildings under construction as building=construction.",
+                mixedAnswer.getSummary());
 
         TaskContext unclear = context(
                 "Map all visible buildings.",
                 "Authorised imagery: Esri World Imagery",
                 "No previous task comments were returned.");
-        requireOutcome(TaskQuestionAnswerer.Outcome.NOT_FOUND,
-                TaskQuestionAnswerer.answer(unclear,
-                        "Should I map buildings under construction?"));
+        TaskQuestionAnswerer.Answer unclearAnswer = TaskQuestionAnswerer.answer(unclear,
+                "Should I map buildings under construction?");
+        requireOutcome(TaskQuestionAnswerer.Outcome.NOT_FOUND, unclearAnswer);
+        requireEquals("Not specified in the loaded task guidance.", unclearAnswer.getSummary());
 
         TaskQuestionAnswerer.Answer imagery = TaskQuestionAnswerer.answer(unclear,
                 "What imagery should I use?");
         requireOutcome(TaskQuestionAnswerer.Outcome.RELATED, imagery);
+        requireEquals("Authorised imagery: Esri World Imagery", imagery.getSummary());
         if (imagery.getEvidence().isEmpty()
                 || !imagery.getEvidence().get(0).getText().contains("Esri World Imagery")) {
             throw new AssertionError("Expected authorised imagery evidence");
         }
+
+        TaskContext overview = context(
+                "Map all visible buildings. Do not map roads. Check the western edge carefully.",
+                "Authorised imagery: Esri World Imagery",
+                "No previous task comments were returned.");
+        TaskQuestionAnswerer.Answer overviewAnswer = TaskQuestionAnswerer.answer(overview,
+                "What am I mapping?");
+        requireOutcome(TaskQuestionAnswerer.Outcome.RELATED, overviewAnswer);
+        requireEquals("Map all visible buildings. Do not map roads.",
+                overviewAnswer.getSummary());
+        requireEquals(1, overviewAnswer.getEvidence().size());
+
+        TaskQuestionAnswerer.Answer alternateOverview = TaskQuestionAnswerer.answer(overview,
+                "What do I need to map?");
+        requireEquals(overviewAnswer.getSummary(), alternateOverview.getSummary());
         System.out.println("TaskQuestionAnswererTest: all tests passed");
     }
 
@@ -52,6 +84,12 @@ public final class TaskQuestionAnswererTest {
         if (expected != actual.getOutcome()) {
             throw new AssertionError("Expected " + expected + " but got "
                     + actual.getOutcome() + ": " + actual.getSummary());
+        }
+    }
+
+    private static void requireEquals(Object expected, Object actual) {
+        if (!expected.equals(actual)) {
+            throw new AssertionError("Expected " + expected + " but got " + actual);
         }
     }
 }

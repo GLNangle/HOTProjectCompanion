@@ -8,7 +8,7 @@ Project page: https://github.com/GLNangle/HOTProjectCompanion
 
 ## Current release
 
-Version 1.0.3 provides:
+Version 1.0.7 provides:
 
 - a dockable **HOT Project Companion** sidebar in JOSM with independently collapsible sections whose states persist across restarts;
 - automatic project and task detection from the JOSM task-boundary layer;
@@ -20,9 +20,9 @@ Version 1.0.3 provides:
 - split-task recognition and 30-day, project-scoped recovery of source-task feedback when HOT omits it from a child task;
 - changeset comment, hashtags and source/imagery details;
 - an explicit reminder that only project-authorised imagery will be considered.
-- a local **Ask about this task** field that matches specific mapper questions against loaded
-  project instructions, imagery guidance and task feedback, shows its evidence and says when the
-  available wording does not answer the question;
+- a local **Ask about this task** field that answers with the conclusion first, quotes only the
+  single best matching instruction and says plainly when the available wording does not answer the
+  question;
 - a local, automatic **Building check** for one selected closed outline, using a captured view of the currently visible project-authorised imagery;
 - automatic measurements of roof consistency, contrast with the surroundings, visible boundary strength and directional shadow evidence;
 - footprint shape shown only as a diagnostic, never as evidence that the imagery contains a building;
@@ -247,28 +247,48 @@ Version 1.0.3 paints only the visible authorised imagery layers into the tempora
 does not hide or restore live layers, paint the complete map component, touch its display buffers or
 request a capture-related repaint, removing the remaining paths that could leave most of the map black.
 
+Version 1.0.4 makes task-question answers shorter and more direct. Yes/no answers begin with the
+conclusion and the exact matching instruction, other questions return the single best passage, and
+unanswered questions use a brief “Not specified” response with at most one related passage.
+
+Version 1.0.5 recognises broad overview questions such as “What am I mapping?” and returns up to two
+of the clearest mapping instructions. The question box now uses JOSM's own text field, which disables
+the editor's global key detector while focused, plus a narrow safeguard against the map reclaiming
+focus immediately after a keystroke.
+
+Version 1.0.6 broadens that safeguard to cover shortcut-triggered focus changes to any JOSM component,
+while leaving deliberate mouse clicks and Tab traversal alone. It retries focus restoration briefly
+when Swing does not accept the first request, preventing the question box from dropping out mid-word.
+
+Version 1.0.7 preserves and restores the exact caret position during that automatic focus recovery.
+This prevents macOS from selecting the question text after JOSM returns focus and stops the next
+character from overwriting what the mapper has already typed.
+
 ## Building check
 
 Load a HOT task, show only its authorised imagery, select exactly one complete closed outline and keep the whole outline visible. Press **Analyse selected outline**. JOSM captures the visible area, performs the measurements locally and displays the result without requiring a questionnaire.
 
 The automatic score combines interior colour/texture consistency (10%), contrast with the surrounding imagery (20%), image-boundary strength along the outline (20%) and coherent directional shadow evidence beside it (30%). When task-image captions clearly identify building or non-building examples, local image similarity supplies the remaining 20%. If no task image is clearly labelled, the four direct imagery measurements are reweighted to 100% rather than inventing example evidence. Footprint geometry is displayed only as a diagnostic and contributes nothing to the score. Scores of 70–100 are **Likely building**, 45–69 **Uncertain**, and 0–44 **Unlikely building**.
 
-The result is an explainable visual match score derived from image measurements, not a trained model or a statistical probability that the object is a building. The plugin refuses to analyse when the project provides no authorised imagery value, no imagery is visible, or any visible imagery layer cannot be matched conservatively to the project-authorised imagery. It temporarily hides visible non-imagery layers while capturing the rendered JOSM map view, restores them immediately afterwards and keeps the image in memory; nothing is transmitted or saved. Instruction images are loaded through the same restricted HTTPS loader used for their display, and the cached decoded image is reused when available.
+The result is an explainable visual match score derived from image measurements, not a trained model or a statistical probability that the object is a building. The plugin refuses to analyse when the project provides no authorised imagery value, no imagery is visible, or any visible imagery layer cannot be matched conservatively to the project-authorised imagery. It paints only the visible authorised imagery layers into a separate in-memory image without changing live layer visibility or painting the complete map component; nothing is transmitted or saved. Instruction images are loaded through the same restricted HTTPS loader used for their display, and the cached decoded image is reused when available.
 
 ## Ask about this task
 
 After a task loads, expand **Ask about this task**, enter a specific question and press **Ask**. The
 companion compares the question locally with the project and task instructions, required-imagery
-guidance and previous task feedback. It shows up to three relevant passages with their source. For a
-yes/no question, it answers yes or no only when sufficiently specific matching wording contains an
-explicit instruction; otherwise it labels the answer unclear or not present and directs the mapper
-back to the full project instructions or project team. No question or task text is sent to an AI
-service.
+guidance and previous task feedback. A yes/no answer starts with **Yes** or **No** and immediately
+shows the exact matching instruction. Other questions return the single best matching passage. If
+the guidance does not answer the question, the plugin says **Not specified** and shows no more than
+one closest related passage. No question or task text is sent to an AI service.
 
 For example, a generic instruction to “map all buildings” is not treated as a project-specific answer
 to “Should I map buildings under construction?” unless the loaded guidance also mentions
 construction. The feature is an instruction finder rather than an authoritative general OSM advice
 service.
+
+Broad questions including “What am I mapping?”, “What should I map?” and “What do I need to map?”
+return up to two concise, explicit instructions from What to map. The question field uses JOSM's
+shortcut-safe text component so ordinary typing is not interpreted as map commands.
 
 ## Task building reconnaissance
 

@@ -31,6 +31,9 @@ final class TaskQuestionAnswerer {
         if (context == null) {
             return Answer.notFound("Load a HOT task before asking a question.");
         }
+        if (isMappingOverviewQuestion(question)) {
+            return mappingOverview(context);
+        }
         Set<String> questionTerms = meaningfulTerms(question);
         if (questionTerms.isEmpty()) {
             return Answer.notFound("Ask a specific question about what to map, imagery or previous feedback.");
@@ -46,30 +49,31 @@ final class TaskQuestionAnswerer {
         passages.removeIf(passage -> passage.matches == 0);
         passages.sort(Comparator.comparingInt(Passage::scoreValue).reversed());
         if (passages.isEmpty()) {
-            return Answer.notFound("The loaded project information does not mention the subject of this question.");
+            return Answer.notFound("Not specified in the loaded task guidance.");
         }
 
         Passage best = passages.get(0);
         double coverage = best.matches / (double) questionTerms.size();
         boolean yesNoQuestion = isYesNoQuestion(question);
         if (yesNoQuestion && coverage < 0.75) {
-            return Answer.notFound("The loaded project information contains only partially related guidance and does not specifically answer this question.",
+            return Answer.notFound("Not specified in the loaded task guidance.",
                     evidence(passages));
         }
 
         String lower = best.text.toLowerCase(Locale.ROOT);
+        String guidance = sentenceCase(best.text);
         if (yesNoQuestion && containsAny(lower, NEGATIVE_MARKERS)) {
             return new Answer(Outcome.NO,
-                    "No — the project guidance appears to rule this out.", evidence(passages));
+                    "No. " + guidance, evidence(passages));
         }
         if (yesNoQuestion && containsAny(lower, POSITIVE_MARKERS)) {
             return new Answer(Outcome.YES,
-                    "Yes — the project guidance appears to include this.", evidence(passages));
+                    "Yes. " + guidance, evidence(passages));
         }
         return new Answer(Outcome.RELATED,
                 yesNoQuestion
-                        ? "Related guidance was found, but it does not give a clear yes or no."
-                        : "The most relevant loaded guidance is shown below.",
+                        ? "No clear yes or no. " + guidance
+                        : guidance,
                 evidence(passages));
     }
 
@@ -81,7 +85,7 @@ final class TaskQuestionAnswerer {
             if (seen.add(key)) {
                 result.add(passage);
             }
-            if (result.size() == 3) {
+            if (result.size() == 1) {
                 break;
             }
         }
@@ -92,7 +96,7 @@ final class TaskQuestionAnswerer {
         if (text == null || text.trim().isEmpty()) {
             return;
         }
-        for (String piece : text.split("(?<=[.!?])\\s+|\\R+")) {
+        for (String piece : text.split("(?<=[.!?])\\s+|\\R+|\\s*;\\s*|\\s+(?i:but|however)\\s+")) {
             String cleaned = piece.trim();
             if (!cleaned.isEmpty()) {
                 target.add(new Passage(source, cleaned));
@@ -132,6 +136,71 @@ final class TaskQuestionAnswerer {
                 || lower.startsWith("is ") || lower.startsWith("are ");
     }
 
+    private static boolean isMappingOverviewQuestion(String question) {
+        String lower = question == null ? "" : question.trim().toLowerCase(Locale.ROOT)
+                .replaceAll("[^\\p{L}\\p{N}]+", " ").trim();
+        return lower.equals("what am i mapping")
+                || lower.equals("what are we mapping")
+                || lower.equals("what should i map")
+                || lower.equals("what should we map")
+                || lower.equals("what do i map")
+                || lower.equals("what do we map")
+                || lower.equals("what do i need to map")
+                || lower.equals("what do we need to map")
+                || lower.equals("what am i supposed to map")
+                || lower.equals("what are mappers mapping")
+                || lower.equals("what is this task asking me to map")
+                || lower.equals("what does this task ask me to map");
+    }
+
+    private static Answer mappingOverview(TaskContext context) {
+        List<Passage> instructions = new ArrayList<>();
+        addPassages(instructions, "Project and task instructions", context.getWhatToMap());
+        if (instructions.isEmpty()) {
+            return Answer.notFound("The loaded task does not provide mapping instructions.");
+        }
+        instructions.sort(Comparator.comparingInt(TaskQuestionAnswerer::overviewScore).reversed());
+        StringBuilder summary = new StringBuilder();
+        for (Passage passage : instructions) {
+            String text = sentenceCase(passage.text);
+            if (summary.length() > 0 && summary.length() + text.length() + 1 > 280) {
+                continue;
+            }
+            if (summary.length() > 0) {
+                summary.append(' ');
+            }
+            summary.append(text);
+            if (summary.length() >= 140 || countSentences(summary.toString()) == 2) {
+                break;
+            }
+        }
+        Passage source = instructions.get(0);
+        return new Answer(Outcome.RELATED, summary.toString(), Collections.singletonList(source));
+    }
+
+    private static int overviewScore(Passage passage) {
+        String lower = passage.text.toLowerCase(Locale.ROOT);
+        int score = containsAny(lower, NEGATIVE_MARKERS) || containsAny(lower, POSITIVE_MARKERS)
+                ? 100 : 0;
+        if (lower.contains("building") || lower.contains("road") || lower.contains("highway")
+                || lower.contains("waterway") || lower.contains("land use")
+                || lower.contains("landuse") || lower.contains("residential")) {
+            score += 40;
+        }
+        return score;
+    }
+
+    private static int countSentences(String text) {
+        int count = 0;
+        for (int index = 0; index < text.length(); index++) {
+            char character = text.charAt(index);
+            if (character == '.' || character == '!' || character == '?') {
+                count++;
+            }
+        }
+        return count;
+    }
+
     private static boolean containsAny(String text, List<String> markers) {
         for (String marker : markers) {
             if (text.contains(marker)) {
@@ -139,6 +208,13 @@ final class TaskQuestionAnswerer {
             }
         }
         return false;
+    }
+
+    private static String sentenceCase(String text) {
+        if (text == null || text.isEmpty() || !Character.isLowerCase(text.charAt(0))) {
+            return text;
+        }
+        return Character.toUpperCase(text.charAt(0)) + text.substring(1);
     }
 
     enum Outcome {

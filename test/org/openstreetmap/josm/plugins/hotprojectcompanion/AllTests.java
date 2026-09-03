@@ -11,6 +11,7 @@ public final class AllTests {
         TaskLayerNameParserTest.main(args);
         TaskContextParserTest.main(args);
         TaskQuestionAnswererTest.main(args);
+        TaskQuestionPanelTest.main(args);
         SplitFeedbackCacheTest.main(args);
         MapCaptureTest.main(args);
         CollapsibleSectionTest.main(args);
