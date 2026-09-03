@@ -6,7 +6,6 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
-import java.awt.Image;
 import java.awt.Point;
 import java.awt.Polygon;
 import java.awt.Rectangle;
@@ -51,12 +50,13 @@ final class BuildingCheckPanel extends JPanel {
     private TaskContext context;
     private int analysisGeneration;
     private Timer pendingCapture;
+    private BufferedImage originalPreview;
 
     BuildingCheckPanel() {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setAlignmentX(Component.LEFT_ALIGNMENT);
         setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
-        setMaximumSize(new Dimension(Integer.MAX_VALUE, 610));
+        setMaximumSize(new Dimension(Integer.MAX_VALUE, 700));
 
         add(wrappingLabel("JOSM will compare the selected outline with the visible authorised imagery and usable example images from this task."));
         add(Box.createVerticalStrut(6));
@@ -143,7 +143,8 @@ final class BuildingCheckPanel extends JPanel {
     private void captureAndAnalyse(int generation, Way way, TaskContext activeContext) {
         try {
             CapturedOutline captured = captureMapCrop(way);
-            preview.setIcon(new ImageIcon(scaleToFit(captured.image, PREVIEW_WIDTH, PREVIEW_HEIGHT)));
+            originalPreview = scaleToFit(captured.image, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+            updatePreview();
             preview.setVisible(true);
             result.setForeground(Color.BLACK);
             result.setText("Analysing the outline and task examples…");
@@ -257,6 +258,10 @@ final class BuildingCheckPanel extends JPanel {
     private void showAnalysisError(String message) {
         result.setForeground(new Color(170, 35, 35));
         result.setText(message);
+    }
+
+    private void updatePreview() {
+        preview.setIcon(originalPreview == null ? null : new ImageIcon(originalPreview));
     }
 
     private static Way selectedClosedWay() {
@@ -437,7 +442,7 @@ final class BuildingCheckPanel extends JPanel {
         return new Polygon(x, y, pointCount);
     }
 
-    private static Image scaleToFit(BufferedImage source, int maxWidth, int maxHeight) {
+    private static BufferedImage scaleToFit(BufferedImage source, int maxWidth, int maxHeight) {
         double scale = Math.min(1.0, Math.min(maxWidth / (double) source.getWidth(),
                 maxHeight / (double) source.getHeight()));
         int width = Math.max(1, (int) Math.round(source.getWidth() * scale));
@@ -455,6 +460,7 @@ final class BuildingCheckPanel extends JPanel {
     }
 
     private void resetDisplay() {
+        originalPreview = null;
         preview.setIcon(null);
         preview.setVisible(false);
         result.setForeground(Color.BLACK);

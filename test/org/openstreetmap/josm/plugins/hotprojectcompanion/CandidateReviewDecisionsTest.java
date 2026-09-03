@@ -31,6 +31,12 @@ public final class CandidateReviewDecisionsTest {
         require(decisions.count(CandidateReviewDecisions.Decision.MAPPED) == 1,
                 "A confirmed mapped candidate should be counted separately");
 
+        decisions.set(2, CandidateReviewDecisions.Decision.OUTSIDE_AREA);
+        require(decisions.count(CandidateReviewDecisions.Decision.OUTSIDE_AREA) == 1,
+                "An outside-area candidate should have a neutral decision");
+        require(decisions.count(CandidateReviewDecisions.Decision.REJECTED) == 1,
+                "An outside-area candidate must not remain counted as rejected");
+
         System.out.println("CandidateReviewDecisionsTest passed");
     }
 

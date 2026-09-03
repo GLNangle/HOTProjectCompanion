@@ -33,7 +33,7 @@ final class SharedLearningClient {
                 .timeout(Duration.ofSeconds(30))
                 .header("Accept", "application/json")
                 .header("Content-Type", "application/json")
-                .header("User-Agent", "JOSM-HOT-Project-Companion/1.0.9")
+                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.2")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         HttpResponse<String> response = httpClient.send(request,
@@ -49,7 +49,7 @@ final class SharedLearningClient {
         HttpRequest request = HttpRequest.newBuilder(URI.create(SERVICE_ROOT + "profile"))
                 .timeout(Duration.ofSeconds(25))
                 .header("Accept", "application/json")
-                .header("User-Agent", "JOSM-HOT-Project-Companion/1.0.9")
+                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.2")
                 .GET()
                 .build();
         HttpResponse<String> response = httpClient.send(request,
@@ -72,7 +72,7 @@ final class SharedLearningClient {
                 .timeout(Duration.ofSeconds(25))
                 .header("Accept", "application/json")
                 .header("X-Withdrawal-Token", withdrawalToken)
-                .header("User-Agent", "JOSM-HOT-Project-Companion/1.0.9")
+                .header("User-Agent", "JOSM-HOT-Project-Companion/1.3.2")
                 .DELETE()
                 .build();
         HttpResponse<String> response = httpClient.send(request,

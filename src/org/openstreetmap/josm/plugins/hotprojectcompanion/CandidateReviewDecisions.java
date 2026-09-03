@@ -6,7 +6,8 @@ final class CandidateReviewDecisions {
         UNREVIEWED,
         ACCEPTED,
         REJECTED,
-        MAPPED
+        MAPPED,
+        OUTSIDE_AREA
     }
 
     private final Decision[] decisions;

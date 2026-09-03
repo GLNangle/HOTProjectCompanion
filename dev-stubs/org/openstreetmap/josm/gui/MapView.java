@@ -35,11 +35,27 @@ public class MapView extends JComponent {
         return 100.0;
     }
 
+    public EastNorth getCenter() {
+        return new EastNorth();
+    }
+
+    public double getScale() {
+        return 1.0;
+    }
+
     public void paintLayer(Layer layer, Graphics2D graphics) {
         // Compile-only stub.
     }
 
     public void zoomTo(EastNorth location) {
+        // Compile-only stub.
+    }
+
+    public void zoomTo(EastNorth location, double scale) {
+        // Compile-only stub.
+    }
+
+    public void zoomToFactor(EastNorth location, double factor) {
         // Compile-only stub.
     }
 

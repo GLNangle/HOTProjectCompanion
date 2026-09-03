@@ -13,6 +13,9 @@ public final class BuildingCandidateScannerTest {
 
     public static void main(String[] args) {
         detectsRectangularAndRoundRoofCandidates();
+        detectsLShapedRoofCandidate();
+        exploratoryDetectsUnequalRectangularLShape();
+        exploratoryFindsClearElongatedRoof();
         excludesAlreadyMappedCandidate();
         doesNotInventCandidatesOnFeaturelessImagery();
         rejectsUnshadowedGroundPatch();
@@ -45,7 +48,7 @@ public final class BuildingCandidateScannerTest {
         Polygon boundary = rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4);
         BuildingCandidateScanner.Result conservative = BuildingCandidateScanner.scan(image,
                 boundary, Collections.emptyList(), null, null, Double.NaN,
-                BuildingCandidateScanner.ScanMode.CONSERVATIVE, Collections.emptyList());
+                BuildingCandidateScanner.ScanMode.BALANCED, Collections.emptyList());
         BuildingCandidateScanner.Result balanced = BuildingCandidateScanner.scan(image,
                 boundary, Collections.emptyList(), null, null, Double.NaN,
                 BuildingCandidateScanner.ScanMode.BALANCED, Collections.emptyList());
@@ -105,6 +108,82 @@ public final class BuildingCandidateScannerTest {
                 "round roof candidate detected");
     }
 
+    private static void detectsLShapedRoofCandidate() {
+        BufferedImage image = new BufferedImage(260, 220, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setColor(new Color(118, 126, 104));
+            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+            graphics.setColor(new Color(52, 55, 47));
+            graphics.fillRect(54, 45, 36, 72);
+            graphics.fillRect(54, 81, 72, 36);
+            graphics.setColor(new Color(188, 174, 141));
+            graphics.fillRect(48, 39, 36, 72);
+            graphics.fillRect(48, 75, 72, 36);
+        } finally {
+            graphics.dispose();
+        }
+        BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
+                rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
+                Collections.emptyList(), null, null, Double.NaN,
+                BuildingCandidateScanner.ScanMode.CONSERVATIVE, Collections.emptyList());
+        require(result.count(BuildingCandidateScanner.Shape.L_SHAPED, false) >= 1,
+                "connected perpendicular roof wings should produce an L-shaped candidate");
+        BuildingCandidateScanner.Candidate candidate = result.getCandidates().stream()
+                .filter(item -> item.getShape() == BuildingCandidateScanner.Shape.L_SHAPED)
+                .findFirst().orElseThrow(() -> new AssertionError("missing L-shaped candidate"));
+        require(candidate.getLCorner() == BuildingCandidateScanner.LCorner.TOP_RIGHT,
+                "the candidate should preserve the missing-corner orientation");
+    }
+
+    private static void exploratoryDetectsUnequalRectangularLShape() {
+        BufferedImage image = new BufferedImage(320, 240, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setColor(new Color(116, 124, 102));
+            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+            graphics.setColor(new Color(49, 53, 44));
+            graphics.fillRect(71, 55, 34, 68);
+            graphics.fillRect(71, 83, 90, 40);
+            graphics.setColor(new Color(190, 176, 142));
+            graphics.fillRect(64, 48, 34, 68);
+            graphics.fillRect(64, 76, 90, 40);
+        } finally {
+            graphics.dispose();
+        }
+        BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
+                rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
+                Collections.emptyList(), null, null, Double.NaN,
+                BuildingCandidateScanner.ScanMode.EXPLORATORY, Collections.emptyList());
+        require(result.getCandidates().stream().anyMatch(candidate ->
+                candidate.getShape() == BuildingCandidateScanner.Shape.L_SHAPED
+                && candidate.getBounds().contains(105, 88)),
+                "exploratory scan should find an elongated L with unequal wing depths");
+    }
+
+    private static void exploratoryFindsClearElongatedRoof() {
+        BufferedImage image = new BufferedImage(300, 240, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setColor(new Color(121, 126, 105));
+            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+            graphics.setColor(new Color(49, 52, 45));
+            graphics.fillRect(99, 80, 88, 53);
+            graphics.setColor(new Color(190, 177, 143));
+            graphics.fillRect(92, 73, 85, 50);
+        } finally {
+            graphics.dispose();
+        }
+        BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
+                rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
+                Collections.emptyList(), null, null, Double.NaN,
+                BuildingCandidateScanner.ScanMode.EXPLORATORY, Collections.emptyList());
+        require(result.getCandidates().stream().anyMatch(candidate ->
+                candidate.getShape() == BuildingCandidateScanner.Shape.RECTANGULAR
+                && candidate.getBounds().contains(134, 98)),
+                "exploratory scan should find a clear mid-elongated roof");
+    }
+
     private static void excludesAlreadyMappedCandidate() {
         BufferedImage image = scene();
         Polygon mappedRectangle = rectangle(36, 42, 48, 36);
@@ -126,20 +205,27 @@ public final class BuildingCandidateScannerTest {
         } finally {
             graphics.dispose();
         }
-        BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
-                rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
-                Collections.emptyList());
-        require(result.getCandidates().isEmpty(), "featureless imagery has no candidates");
+        for (BuildingCandidateScanner.ScanMode mode : BuildingCandidateScanner.ScanMode.values()) {
+            BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
+                    rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
+                    Collections.emptyList(), null, null, Double.NaN, mode,
+                    Collections.emptyList());
+            require(result.getCandidates().isEmpty(),
+                    "featureless imagery has no candidates in " + mode);
+        }
     }
 
     private static void rejectsUnshadowedGroundPatch() {
         BufferedImage image = flatPatch(new Color(116, 112, 96),
                 new Color(178, 166, 132), false);
-        BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
-                rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
-                Collections.emptyList());
-        require(result.getCandidates().isEmpty(),
-                "a bounded bright ground patch without a directional shadow is rejected");
+        for (BuildingCandidateScanner.ScanMode mode : BuildingCandidateScanner.ScanMode.values()) {
+            BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
+                    rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
+                    Collections.emptyList(), null, null, Double.NaN, mode,
+                    Collections.emptyList());
+            require(result.getCandidates().isEmpty(),
+                    "an unshadowed bright ground patch is rejected in " + mode);
+        }
     }
 
     private static void rejectsVegetationPatch() {
@@ -189,11 +275,14 @@ public final class BuildingCandidateScannerTest {
         } finally {
             graphics.dispose();
         }
-        BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
-                rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
-                Collections.emptyList());
-        require(result.getCandidates().isEmpty(),
-                "a road-like band with two long edges is rejected");
+        for (BuildingCandidateScanner.ScanMode mode : BuildingCandidateScanner.ScanMode.values()) {
+            BuildingCandidateScanner.Result result = BuildingCandidateScanner.scan(image,
+                    rectangle(2, 2, image.getWidth() - 4, image.getHeight() - 4),
+                    Collections.emptyList(), null, null, Double.NaN, mode,
+                    Collections.emptyList());
+            require(result.getCandidates().isEmpty(),
+                    "a road-like band with two long edges is rejected in " + mode);
+        }
     }
 
     private static void assessesMappedOutlinesForReview() {

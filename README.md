@@ -8,7 +8,7 @@ Project page: https://github.com/GLNangle/HOTProjectCompanion
 
 ## Current release
 
-Version 1.0.9 provides:
+Version 1.3.2 provides:
 
 - a dockable **HOT Project Companion** sidebar in JOSM with independently collapsible sections whose states persist across restarts;
 - a dismissible first-use tip explaining that JOSM's pin icon can detach the companion into a separate, resizable window;
@@ -35,13 +35,19 @@ Version 1.0.9 provides:
 - persistent **Conservative**, **Balanced (Recommended)** and **Exploratory** sensitivity modes,
   with concise in-plugin guidance about each mode and an explicit warning that Exploratory will
   include more non-buildings;
+- denser candidate placement and an additional mid-elongated roof proportion in Exploratory mode,
+  preventing clear buildings from being skipped merely because a coarse template grid missed their edges;
 - a short explanation of the boundary, shadow, texture and contrast evidence that caused each
   candidate to be shown;
-- **Rescan after review**, which returns to the previous scan extent and excludes locations already
-  accepted, rejected or mapped during the current task session;
+- reviewed-location exclusions that apply to every later scan of the same task, preventing accepted,
+  rejected, mapped and confirmed mapped-building locations from being highlighted again;
+- a neutral **Outside my area** outcome for boundary-cut or partial items, which hides the location
+  from later scans without recording a positive or negative learning example;
 - exact counts of downloaded closed building ways classified as rectangular/orthogonal, round or other;
-- conservative estimates of possible unmapped rectangular, round and uncertain candidates from the rendered authorised imagery;
-- a review checklist with annotated thumbnails and buttons that zoom to a marked close-up of each candidate;
+- conservative estimates of possible unmapped rectangular, round, L-shaped and uncertain candidates from the rendered authorised imagery;
+- a review checklist with annotated thumbnails and adaptive, centred close-ups calculated from
+  each candidate's real map dimensions rather than the zoom used for the scan;
+- persistent **Closer**, **Wider** and **Reset** review controls with seven fine-grained zoom positions;
 - a temporary labelled candidate overlay that can be hidden and shown without changing the close-up;
 - a temporary toggle for hiding and restoring mapped `building=*` outlines while checking the imagery beneath them;
 - a separate, cautious shortlist of mapped building outlines with unusually weak visual evidence in the current authorised imagery;
@@ -274,6 +280,53 @@ Version 1.0.9 adds guidance beneath the reconnaissance sensitivity selector. It 
 trade-off for every mode, marks Balanced as recommended for most tasks and warns that Exploratory
 deliberately includes weaker candidates, so more non-buildings should be expected.
 
+Version 1.1.0 adds adaptive candidate review zoom. Candidate close-ups are calculated when opened,
+using the candidate's projected map size and the current map-view aspect ratio, so their framing no
+longer depends on the zoom used for the original scan. Closer and Wider provide seven fine-grained
+positions, Reset returns to the recommended automatic view, and the selected level persists in JOSM
+preferences. The same controls work for possible unmapped candidates and flagged mapped buildings.
+
+Versions 1.1.1 through 1.1.6 were local test iterations of a general Fine map zoom control. Live
+testing on JOSM 19613 showed that its supported navigation paths either retained imagery native-scale
+snapping, ignored intermediate requests or reduced synthetic input to the mapper's normal whole zoom
+step. Version 1.1.5 also exposed a development-stub compatibility error, corrected in 1.1.6.
+
+Version 1.1.7 removes that unsuccessful experimental section rather than relying on unsupported JOSM
+internals. The independently adjustable Closer, Wider and Reset controls for candidate-review
+close-ups remain available and unchanged.
+
+Version 1.1.8 adds an optional sharper Building check preview for the selected outline. The mapper
+can switch instantly between the processed and original capture. Sharpening is local and visual only:
+it does not alter JOSM imagery, recover missing resolution, feed the scanner or change the analysis
+score, and the panel explicitly warns that strong edges may gain halos.
+
+Version 1.1.9 applies the stronger sharpening pass after the captured image has been reduced to its
+final preview size, preventing downscaling from smoothing the visible difference away. It also moves
+the candidate-review Closer, Wider and Reset controls into a clearly labelled Selected building view
+block above all mapped-building and candidate rows, so they are available as soon as review begins.
+
+Version 1.2.0 keeps reviewed locations excluded from every later scan of the same task, including
+confirmed and rejected mapped-building reviews. It also adds a neutral **Outside my area** outcome
+for a feature cut by the task or visible-area boundary. That outcome suppresses the location but does
+not label it as a building or non-building for local or shared learning.
+
+Version 1.3.0 removes the sharper Building check preview after live testing showed that it did not
+produce a useful visible improvement. Reconnaissance now also recognises conservative axis-aligned
+L-shaped roof candidates. An L must have two consistent connected wings, a contrasting unoccupied
+corner, a coherent six-edge outline and supporting shadow evidence. Its thumbnail and temporary map
+highlight preserve the detected orientation. Rectangular and round detection remain unchanged.
+
+Version 1.3.1 improves recall in Exploratory mode without lowering the scanner's hard imagery gates.
+It samples candidate placement as precisely as Conservative, adds a missing 1.7:1 rectangular roof
+template, prevents small high-scoring fragments from suppressing a correctly sized whole-building
+proposal, and excludes implausibly tiny round and L-shaped fragments.
+
+Version 1.3.2 keeps reviewed locations anchored to the original scan image, so changing the live map
+view no longer causes confirmed or rejected candidates to return during a same-task rescan. In
+Exploratory mode, L-shaped detection now tests rectangular footprints and unequal wing depths as
+well as the original square 50/50 template, while retaining stronger evidence requirements for
+these more flexible shapes.
+
 ## Building check
 
 Load a HOT task, show only its authorised imagery, select exactly one complete closed outline and keep the whole outline visible. Press **Analyse selected outline**. JOSM captures the visible area, performs the measurements locally and displays the result without requiring a questionnaire.
@@ -322,9 +375,12 @@ Mapped footprints are classified as rectangular/orthogonal, round or other using
 The results separate high-confidence rectangular and round candidates from uncertain candidates.
 Each annotated thumbnail states why the proposal survived, such as coherent roof boundary,
 directional shadow, consistent interior texture or clear separation from its surroundings. Pressing
-a review button zooms JOSM to a padded close-up and draws a temporary labelled highlight over the
-candidate. **Hide candidate outline** removes only that temporary marker while preserving the
-close-up; **Show candidate outline** restores it. **Hide mapped building outlines** temporarily hides
+a review button calculates a centred close-up from the candidate's real map dimensions and the
+current map-view shape, then draws a temporary labelled highlight over the candidate. Use
+**Closer** or **Wider** for fine-grained adjustment, or **Reset** to restore the recommended automatic
+framing. The selected review zoom is remembered in JOSM preferences and is shared by possible
+unmapped candidates and flagged mapped buildings. **Hide candidate outline** removes only that
+temporary marker while preserving the close-up; **Show candidate outline** restores it. **Hide mapped building outlines** temporarily hides
 existing `building=*` objects through JOSM's filter model so the mapper can inspect the imagery
 underneath; **Show mapped building outlines** restores them and recalculates any filters the mapper
 already had enabled.
@@ -339,14 +395,20 @@ list, uses it as a negative local example and keeps it in a recoverable section 
 OSM correction. The plugin does not delete the existing object. Restoring either decision reverses
 the learning observation and returns the item to active review.
 
+If too little of a mapped object or candidate lies inside the scanned area to make a responsible
+decision, choose **Outside my area**. The item moves to a recoverable outside-area section and its
+location is omitted from later scans of the same task. This is deliberately neutral: it does not
+add a positive or negative learning example. Restoring it makes the location eligible again.
+
 After review, **Reject** removes a false detection from the active list. Rejected candidates remain behind **Show rejected candidates** and can be restored. **Accept** moves a candidate to **Accepted — awaiting manual mapping**. **Map this building** returns to its close-up with the marker hidden so the mapper can use JOSM's normal Draw tool and trace the actual roof. **Check if mapped** looks for a complete closed way tagged `building=*` over the candidate centre and, when found, moves it to **Mapped during this review**. A mapped or rejected candidate can be restored if the classification was mistaken.
 
-After accepting, rejecting or mapping at least one candidate, **Rescan after review** returns to the
-same full-task or visible-area extent and omits those reviewed locations. This prevents the same
-slightly shifted proposal from immediately reappearing. Restoring a rejection before rescanning
-makes that location eligible again; a mapped candidate remains excluded by the downloaded/current
-building inventory. A normal scan clears the reviewed-location exclusions. The reviewed-location
-list lasts only for the current task session. Navigation and checking do not
+After any review decision, **Rescan after review** returns to the same full-task or visible-area
+extent and omits those reviewed locations. Ordinary full-task and visible-area scans now use the
+same exclusions, preventing the same or slightly shifted proposal from reappearing. The exclusions
+also cover confirmed and rejected mapped-building reviews. Restoring a rejected or outside-area
+decision makes that location eligible again; a mapped candidate remains excluded by the
+downloaded/current building inventory. The reviewed-location list is retained while the same task
+is open or reloaded and is cleared when a different task is loaded. Navigation and checking do not
 create, reshape, tag, delete or upload an OSM object; all actual tracing remains a deliberate mapper
 action.
 

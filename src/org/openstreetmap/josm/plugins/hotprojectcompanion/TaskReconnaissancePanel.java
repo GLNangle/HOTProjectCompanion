@@ -54,6 +54,10 @@ import org.openstreetmap.josm.gui.layer.OsmDataLayer;
 final class TaskReconnaissancePanel extends JPanel {
     private static final long serialVersionUID = 1L;
     private static final int THUMBNAIL_SIZE = 82;
+    private static final int MIN_REVIEW_ZOOM_STEP = -3;
+    private static final int MAX_REVIEW_ZOOM_STEP = 3;
+    private static final String REVIEW_ZOOM_PREFERENCE =
+            PluginPreferences.PREFIX + "review.zoom.step";
 
     private final JButton scanButton = SidebarButtons.create(tr("Scan entire task"));
     private final JButton scanVisibleButton = SidebarButtons.create(tr("Scan visible area"));
@@ -62,6 +66,11 @@ final class TaskReconnaissancePanel extends JPanel {
             BuildingCandidateScanner.ScanMode.values());
     private final JLabel scanModeGuidance = wrappingLabel("");
     private final JButton highlightToggleButton = SidebarButtons.create(tr("Hide candidate outline"));
+    private final JButton reviewCloserButton = SidebarButtons.create(tr("Closer"));
+    private final JButton reviewWiderButton = SidebarButtons.create(tr("Wider"));
+    private final JButton reviewZoomResetButton = SidebarButtons.create(tr("Reset"));
+    private final JLabel reviewZoomLabel = new JLabel();
+    private final JPanel reviewZoomControls = new JPanel();
     private final JButton mappedBuildingsToggleButton = SidebarButtons.create(tr("Hide mapped building outlines"));
     private final JButton learnMissedButton = SidebarButtons.create(
             tr("Learn from buildings drawn since scan"));
@@ -73,12 +82,16 @@ final class TaskReconnaissancePanel extends JPanel {
     private int scanGeneration;
     private MapViewPaintable reviewHighlight;
     private boolean reviewHighlightVisible;
+    private ProjectionBounds activeReviewArea;
+    private int reviewZoomStep;
     private CandidateReviewDecisions reviewDecisions;
     private final List<CandidateReviewItem> candidateItems = new ArrayList<>();
     private final List<MappedReviewItem> mappedReviewItems = new ArrayList<>();
     private boolean rejectedExpanded;
+    private boolean outsideCandidatesExpanded;
     private boolean confirmedMappedExpanded;
     private boolean notBuildingMappedExpanded;
+    private boolean outsideMappedExpanded;
     private int activeCandidateNumber = -1;
     private int activeMappedReviewNumber = -1;
     private TaskCapture displayedCapture;
@@ -98,11 +111,12 @@ final class TaskReconnaissancePanel extends JPanel {
         this.learningStore = learningStore;
         this.sharedLearningStore = sharedLearningStore;
         this.learningChanged = learningChanged;
+        reviewZoomStep = parseReviewZoomStep(preferences.get(REVIEW_ZOOM_PREFERENCE, "0"));
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setAlignmentX(Component.LEFT_ALIGNMENT);
         setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
 
-        add(wrappingLabel("Count downloaded mapped buildings and estimate possible unmapped rectangular and round candidates from the visible authorised imagery."));
+        add(wrappingLabel("Count downloaded mapped buildings and estimate possible unmapped rectangular, round and L-shaped candidates from the visible authorised imagery."));
         add(Box.createVerticalStrut(6));
         JLabel modeLabel = new JLabel(tr("Scan sensitivity:"));
         modeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -134,10 +148,11 @@ final class TaskReconnaissancePanel extends JPanel {
         scanVisibleButton.addActionListener(event -> scanTask(ScanScope.VISIBLE_AREA));
         rescanButton.setEnabled(false);
         rescanButton.setToolTipText(tr(
-                "Scan the same area again and omit candidate locations already accepted, rejected or mapped."));
+                "Scan the same area again and omit locations already reviewed or marked outside your area."));
         rescanButton.addActionListener(event -> rescanAfterReview());
         highlightToggleButton.setEnabled(false);
         highlightToggleButton.addActionListener(event -> toggleReviewHighlight());
+        configureReviewZoomControls();
         mappedBuildingsToggleButton.setEnabled(false);
         mappedBuildingsToggleButton.setToolTipText(tr(
                 "Temporarily hide building-tagged OSM objects without changing map data."));
@@ -163,11 +178,97 @@ final class TaskReconnaissancePanel extends JPanel {
         add(warning);
     }
 
+    private void configureReviewZoomControls() {
+        reviewZoomControls.setLayout(new BoxLayout(reviewZoomControls, BoxLayout.Y_AXIS));
+        reviewZoomControls.setAlignmentX(Component.LEFT_ALIGNMENT);
+        reviewZoomLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        reviewZoomControls.add(reviewZoomLabel);
+        JPanel buttons = new JPanel();
+        buttons.setLayout(new BoxLayout(buttons, BoxLayout.X_AXIS));
+        buttons.setAlignmentX(Component.LEFT_ALIGNMENT);
+        reviewCloserButton.setToolTipText(tr(
+                "Show the active building larger while keeping it centred."));
+        reviewWiderButton.setToolTipText(tr(
+                "Show more imagery around the active building while keeping it centred."));
+        reviewZoomResetButton.setToolTipText(tr(
+                "Return to the recommended automatic review framing."));
+        reviewCloserButton.addActionListener(event -> changeReviewZoom(-1));
+        reviewWiderButton.addActionListener(event -> changeReviewZoom(1));
+        reviewZoomResetButton.addActionListener(event -> setReviewZoom(0));
+        buttons.add(reviewCloserButton);
+        buttons.add(Box.createHorizontalStrut(3));
+        buttons.add(reviewWiderButton);
+        buttons.add(Box.createHorizontalStrut(3));
+        buttons.add(reviewZoomResetButton);
+        reviewZoomControls.add(buttons);
+        updateReviewZoomControls();
+    }
+
+    private void changeReviewZoom(int delta) {
+        setReviewZoom(reviewZoomStep + delta);
+    }
+
+    private void setReviewZoom(int requestedStep) {
+        reviewZoomStep = Math.max(MIN_REVIEW_ZOOM_STEP,
+                Math.min(MAX_REVIEW_ZOOM_STEP, requestedStep));
+        preferences.put(REVIEW_ZOOM_PREFERENCE, Integer.toString(reviewZoomStep));
+        updateReviewZoomControls();
+        applyActiveReviewZoom();
+    }
+
+    private void updateReviewZoomControls() {
+        boolean active = activeReviewArea != null;
+        reviewZoomLabel.setText(tr("Review zoom: {0}%",
+                CandidateReviewNavigation.zoomPercentage(reviewZoomStep)));
+        reviewCloserButton.setEnabled(active && reviewZoomStep > MIN_REVIEW_ZOOM_STEP);
+        reviewWiderButton.setEnabled(active && reviewZoomStep < MAX_REVIEW_ZOOM_STEP);
+        reviewZoomResetButton.setEnabled(active && reviewZoomStep != 0);
+    }
+
+    private boolean applyActiveReviewZoom() {
+        if (activeReviewArea == null) {
+            return false;
+        }
+        MapFrame map = MainApplication.getMap();
+        if (map == null || map.mapView == null
+                || map.mapView.getWidth() < 1 || map.mapView.getHeight() < 1) {
+            showError("The JOSM map view is not available.");
+            return false;
+        }
+        try {
+            map.mapView.zoomTo(CandidateReviewNavigation.adaptiveReviewBounds(
+                    activeReviewArea, map.mapView.getWidth(), map.mapView.getHeight(),
+                    reviewZoomStep));
+            updateReviewZoomControls();
+            map.mapView.repaint();
+            return true;
+        } catch (IllegalArgumentException exception) {
+            showError(exception.getMessage());
+            return false;
+        }
+    }
+
+    private static int parseReviewZoomStep(String value) {
+        try {
+            return Math.max(MIN_REVIEW_ZOOM_STEP,
+                    Math.min(MAX_REVIEW_ZOOM_STEP, Integer.parseInt(value)));
+        } catch (NumberFormatException exception) {
+            return 0;
+        }
+    }
+
     void setContext(TaskContext context, TaskReference reference) {
         scanGeneration++;
+        boolean sameTask = this.reference != null && reference != null
+                && this.reference.getProjectId() == reference.getProjectId()
+                && this.reference.getTaskId() == reference.getTaskId()
+                && this.reference.getInstance().equals(reference.getInstance());
+        List<ProjectionBounds> retainedReviewedAreas = sameTask
+                ? new ArrayList<>(reviewedCandidateAreas) : new ArrayList<>();
         this.context = context;
         this.reference = reference;
         reset();
+        reviewedCandidateAreas.addAll(retainedReviewedAreas);
         scanButton.setEnabled(true);
         scanVisibleButton.setEnabled(true);
         state.setForeground(new Color(0, 105, 45));
@@ -186,10 +287,6 @@ final class TaskReconnaissancePanel extends JPanel {
     }
 
     private void scanTask(ScanScope scope) {
-        scanTask(scope, false);
-    }
-
-    private void scanTask(ScanScope scope, boolean excludeReviewed) {
         int generation = ++scanGeneration;
         try {
             clearReviewHighlight();
@@ -199,11 +296,7 @@ final class TaskReconnaissancePanel extends JPanel {
             BuildingCheckPanel.verifyAuthorisedImagery(context.getAuthorisedImagery());
             TaskCapture capture = captureTask(reference, scope);
             BuildingCandidateScanner.ScanMode mode = selectedScanMode();
-            List<Rectangle> reviewedRegions = excludeReviewed
-                    ? reviewedRegionsFor(capture) : new ArrayList<>();
-            if (!excludeReviewed) {
-                reviewedCandidateAreas.clear();
-            }
+            List<Rectangle> reviewedRegions = reviewedRegionsFor(capture);
             setScanButtonsEnabled(false);
             checklist.removeAll();
             checklist.setVisible(false);
@@ -222,7 +315,8 @@ final class TaskReconnaissancePanel extends JPanel {
                             learningStore.geometryProfile(context.getAuthorisedImagery()),
                             capture.metresPerPixel, mode, reviewedRegions,
                             sharedLearningStore.profile());
-                    return new ScanResult(candidates, mappedBuildingsToReview(capture));
+                    return new ScanResult(candidates,
+                            mappedBuildingsToReview(capture, reviewedRegions));
                 }
 
                 @Override
@@ -305,7 +399,7 @@ final class TaskReconnaissancePanel extends JPanel {
         map.mapView.repaint();
         state.setForeground(new Color(0, 105, 45));
         state.setText("Returning to the previous scan area before rescanning…");
-        SwingUtilities.invokeLater(() -> scanTask(scope, true));
+        SwingUtilities.invokeLater(() -> scanTask(scope));
     }
 
     private void rememberReviewedArea(ProjectionBounds area) {
@@ -316,19 +410,15 @@ final class TaskReconnaissancePanel extends JPanel {
 
     private List<Rectangle> reviewedRegionsFor(TaskCapture capture) {
         List<Rectangle> result = new ArrayList<>();
-        MapFrame map = MainApplication.getMap();
-        if (map == null || map.mapView == null) {
-            return result;
-        }
         Rectangle imageBounds = new Rectangle(0, 0,
                 capture.image.getWidth(), capture.image.getHeight());
         for (ProjectionBounds reviewed : reviewedCandidateAreas) {
-            Point first = map.mapView.getPoint(reviewed.getMin());
-            Point second = map.mapView.getPoint(reviewed.getMax());
-            int x = Math.min(first.x, second.x) - capture.crop.x;
-            int y = Math.min(first.y, second.y) - capture.crop.y;
-            int width = Math.max(1, Math.abs(first.x - second.x));
-            int height = Math.max(1, Math.abs(first.y - second.y));
+            Rectangle pixels = pixelBoundsFor(reviewed, capture.scanBounds,
+                    capture.image.getWidth(), capture.image.getHeight());
+            int x = pixels.x;
+            int y = pixels.y;
+            int width = pixels.width;
+            int height = pixels.height;
             int paddingX = Math.max(3, width / 4);
             int paddingY = Math.max(3, height / 4);
             Rectangle expanded = new Rectangle(x - paddingX, y - paddingY,
@@ -351,34 +441,27 @@ final class TaskReconnaissancePanel extends JPanel {
         mappedReviewItems.clear();
         learnedBuildingWays.clear();
         rejectedExpanded = false;
+        outsideCandidatesExpanded = false;
         confirmedMappedExpanded = false;
         notBuildingMappedExpanded = false;
+        outsideMappedExpanded = false;
         updateSummary();
 
-        MapView mapView = MainApplication.getMap().mapView;
         int mappedIndex = 1;
         for (MappedBuildingConcern concern : mappedToReview) {
             Rectangle bounds = concern.bounds;
-            Rectangle mappedPixels = new Rectangle(capture.crop.x + bounds.x,
-                    capture.crop.y + bounds.y, bounds.width, bounds.height);
-            Rectangle reviewPixels = CandidateReviewNavigation.reviewRectangle(mappedPixels,
-                    new Rectangle(0, 0, mapView.getWidth(), mapView.getHeight()));
             mappedReviewItems.add(createMappedReviewItem(capture.image, concern, mappedIndex,
-                    mapView.getProjectionBounds(mappedPixels),
-                    mapView.getProjectionBounds(reviewPixels)));
+                    projectionBoundsFor(bounds, capture.scanBounds,
+                            capture.image.getWidth(), capture.image.getHeight())));
             mappedIndex++;
         }
         int index = 1;
         for (BuildingCandidateScanner.Candidate candidate : result.getCandidates()) {
             Rectangle bounds = candidate.getBounds();
-            Rectangle candidatePixels = new Rectangle(capture.crop.x + bounds.x,
-                    capture.crop.y + bounds.y, bounds.width, bounds.height);
-            Rectangle reviewPixels = CandidateReviewNavigation.reviewRectangle(candidatePixels,
-                    new Rectangle(0, 0, mapView.getWidth(), mapView.getHeight()));
-            ProjectionBounds candidateArea = mapView.getProjectionBounds(candidatePixels);
-            ProjectionBounds reviewArea = mapView.getProjectionBounds(reviewPixels);
+            ProjectionBounds candidateArea = projectionBoundsFor(bounds, capture.scanBounds,
+                    capture.image.getWidth(), capture.image.getHeight());
             candidateItems.add(createCandidateItem(capture.image, candidate, index,
-                    candidateArea, reviewArea));
+                    candidateArea));
             index++;
         }
         rebuildChecklist();
@@ -394,9 +477,47 @@ final class TaskReconnaissancePanel extends JPanel {
         repaint();
     }
 
+    static Rectangle pixelBoundsFor(ProjectionBounds area, ProjectionBounds imageArea,
+            int imageWidth, int imageHeight) {
+        if (area == null || imageArea == null) {
+            return new Rectangle();
+        }
+        double eastSpan = imageArea.getMax().east() - imageArea.getMin().east();
+        double northSpan = imageArea.getMax().north() - imageArea.getMin().north();
+        if (eastSpan <= 0 || northSpan <= 0 || imageWidth < 1 || imageHeight < 1) {
+            return new Rectangle();
+        }
+        int left = (int) Math.round((area.getMin().east() - imageArea.getMin().east())
+                / eastSpan * imageWidth);
+        int right = (int) Math.round((area.getMax().east() - imageArea.getMin().east())
+                / eastSpan * imageWidth);
+        int top = (int) Math.round((imageArea.getMax().north() - area.getMax().north())
+                / northSpan * imageHeight);
+        int bottom = (int) Math.round((imageArea.getMax().north() - area.getMin().north())
+                / northSpan * imageHeight);
+        return new Rectangle(Math.min(left, right), Math.min(top, bottom),
+                Math.max(1, Math.abs(right - left)), Math.max(1, Math.abs(bottom - top)));
+    }
+
+    static ProjectionBounds projectionBoundsFor(Rectangle pixels, ProjectionBounds imageArea,
+            int imageWidth, int imageHeight) {
+        if (pixels == null || imageArea == null || imageWidth < 1 || imageHeight < 1) {
+            return imageArea;
+        }
+        double eastSpan = imageArea.getMax().east() - imageArea.getMin().east();
+        double northSpan = imageArea.getMax().north() - imageArea.getMin().north();
+        double minEast = imageArea.getMin().east() + pixels.x / (double) imageWidth * eastSpan;
+        double maxEast = imageArea.getMin().east()
+                + (pixels.x + pixels.width) / (double) imageWidth * eastSpan;
+        double maxNorth = imageArea.getMax().north() - pixels.y / (double) imageHeight * northSpan;
+        double minNorth = imageArea.getMax().north()
+                - (pixels.y + pixels.height) / (double) imageHeight * northSpan;
+        return new ProjectionBounds(minEast, minNorth, maxEast, maxNorth);
+    }
+
     private CandidateReviewItem createCandidateItem(BufferedImage image,
             BuildingCandidateScanner.Candidate candidate, int candidateNumber,
-            ProjectionBounds candidateArea, ProjectionBounds reviewArea) {
+            ProjectionBounds candidateArea) {
         JPanel row = new JPanel();
         row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -406,14 +527,14 @@ final class TaskReconnaissancePanel extends JPanel {
         JPanel details = new JPanel();
         details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
         details.setAlignmentX(Component.LEFT_ALIGNMENT);
-        String shape = candidate.getShape() == BuildingCandidateScanner.Shape.ROUND
-                ? "round" : "rectangular";
+        String shape = candidateShapeLabel(candidate.getShape());
         String confidence = candidate.isHighConfidence() ? "high" : "uncertain";
         JButton review = SidebarButtons.create("Review " + candidateNumber + " · " + shape + " · "
                 + candidate.getConfidence() + "/100 (" + confidence + ")");
         review.setAlignmentX(Component.LEFT_ALIGNMENT);
         review.addActionListener(event -> reviewCandidate(candidateNumber,
-                candidate.getShape(), candidateArea, reviewArea));
+                candidate.getShape(), candidate.getLCorner(), candidate.getArmFractionX(),
+                candidate.getArmFractionY(), candidateArea));
         details.add(review);
 
         JLabel evidenceLabel = wrappingLabel("Why shown: " + candidate.explanation() + ".");
@@ -441,6 +562,15 @@ final class TaskReconnaissancePanel extends JPanel {
         decisions.add(reject);
         details.add(decisions);
 
+        JButton outsideArea = SidebarButtons.create(tr("Outside my area"));
+        outsideArea.setAlignmentX(Component.LEFT_ALIGNMENT);
+        outsideArea.setEnabled(false);
+        outsideArea.setToolTipText(tr(
+                "Hide this partial or boundary-cut item without teaching the companion that it is or is not a building."));
+        outsideArea.addActionListener(event -> recordDecision(candidateNumber,
+                CandidateReviewDecisions.Decision.OUTSIDE_AREA));
+        details.add(outsideArea);
+
         JButton map = SidebarButtons.create(tr("Map this building"));
         map.setAlignmentX(Component.LEFT_ALIGNMENT);
         map.setVisible(false);
@@ -461,20 +591,26 @@ final class TaskReconnaissancePanel extends JPanel {
         details.add(restore);
         row.add(details);
 
-        CandidateReviewItem item = new CandidateReviewItem(candidateNumber, candidate.getShape(), candidateArea,
-                reviewArea, candidate.getEvidence(), row, decisionLabel, decisions, accept,
-                reject, map, checkMapped, restore, geometryEdits);
+        CandidateReviewItem item = new CandidateReviewItem(candidateNumber, candidate.getShape(),
+                candidate.getLCorner(), candidate.getArmFractionX(), candidate.getArmFractionY(),
+                candidateArea,
+                candidate.getEvidence(), row, decisionLabel, decisions, accept,
+                reject, outsideArea, map, checkMapped, restore, geometryEdits);
         geometryEdits.setSaveAction(() -> saveGeometryEdits(item.geometryEdits));
         return item;
     }
 
-    private static List<MappedBuildingConcern> mappedBuildingsToReview(TaskCapture capture) {
+    private static List<MappedBuildingConcern> mappedBuildingsToReview(TaskCapture capture,
+            List<Rectangle> reviewedRegions) {
         List<MappedBuildingConcern> concerns = new ArrayList<>();
         for (int index = 0; index < capture.mappedPolygons.size(); index++) {
             Polygon footprint = capture.mappedPolygons.get(index);
             Way way = capture.mappedWays.get(index);
             Rectangle bounds = footprint.getBounds();
             if (bounds.width < 6 || bounds.height < 6) {
+                continue;
+            }
+            if (intersectsAny(bounds, reviewedRegions)) {
                 continue;
             }
             BuildingShapeClassifier.Shape mappedShape = BuildingShapeClassifier.classify(
@@ -494,9 +630,17 @@ final class TaskReconnaissancePanel extends JPanel {
         return new ArrayList<>(concerns.subList(0, Math.min(10, concerns.size())));
     }
 
+    private static boolean intersectsAny(Rectangle bounds, List<Rectangle> regions) {
+        for (Rectangle region : regions) {
+            if (bounds.intersects(region)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private MappedReviewItem createMappedReviewItem(BufferedImage image,
-            MappedBuildingConcern concern, int number, ProjectionBounds mappedArea,
-            ProjectionBounds reviewArea) {
+            MappedBuildingConcern concern, int number, ProjectionBounds mappedArea) {
         JPanel row = new JPanel();
         row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -511,14 +655,14 @@ final class TaskReconnaissancePanel extends JPanel {
                 + concern.score + "/100 visual evidence");
         review.setAlignmentX(Component.LEFT_ALIGNMENT);
         review.addActionListener(event -> reviewMappedBuilding(number, concern.shape,
-                mappedArea, reviewArea));
+                mappedArea));
         details.add(review);
         JButton toggleHighlight = SidebarButtons.create(tr("Show / hide review highlight"));
         toggleHighlight.setAlignmentX(Component.LEFT_ALIGNMENT);
         toggleHighlight.setToolTipText(tr(
                 "Toggle the labelled review marker so the imagery underneath can be inspected."));
         toggleHighlight.addActionListener(event -> toggleMappedReviewHighlight(number,
-                concern.shape, mappedArea, reviewArea));
+                concern.shape, mappedArea));
         details.add(toggleHighlight);
         JLabel decisionLabel = new JLabel(tr("Decision: not reviewed"));
         decisionLabel.setForeground(new Color(95, 95, 95));
@@ -539,6 +683,14 @@ final class TaskReconnaissancePanel extends JPanel {
         decisions.add(Box.createHorizontalStrut(3));
         decisions.add(notBuilding);
         details.add(decisions);
+        JButton outsideArea = SidebarButtons.create(tr("Outside my area"));
+        outsideArea.setAlignmentX(Component.LEFT_ALIGNMENT);
+        outsideArea.setEnabled(false);
+        outsideArea.setToolTipText(tr(
+                "Hide this partial or boundary-cut item without teaching the companion that it is or is not a building."));
+        outsideArea.addActionListener(event -> recordMappedReviewDecision(number,
+                MappedReviewDecision.OUTSIDE_AREA));
+        details.add(outsideArea);
         GeometryEditControls geometryEdits = createGeometryEditControls();
         geometryEdits.panel.setVisible(false);
         details.add(geometryEdits.panel);
@@ -549,7 +701,8 @@ final class TaskReconnaissancePanel extends JPanel {
         details.add(restore);
         row.add(details);
         MappedReviewItem item = new MappedReviewItem(number, concern.shape, concern.evidence,
-                row, decisionLabel, decisions, confirm, notBuilding, restore, geometryEdits);
+                mappedArea, row, decisionLabel, decisions, confirm, notBuilding,
+                outsideArea, restore, geometryEdits);
         geometryEdits.measurementProvider = () -> GeometryMeasurement.betweenWays(
                 concern.originalGeometry, concern.way);
         geometryEdits.setSaveAction(() -> saveGeometryEdits(item.geometryEdits));
@@ -557,14 +710,15 @@ final class TaskReconnaissancePanel extends JPanel {
     }
 
     private void reviewMappedBuilding(int number, BuildingCandidateScanner.Shape shape,
-            ProjectionBounds mappedArea, ProjectionBounds reviewArea) {
+            ProjectionBounds mappedArea) {
         MapFrame map = MainApplication.getMap();
         if (map == null || map.mapView == null) {
             showError("The JOSM map view is not available.");
             return;
         }
         clearReviewHighlight();
-        map.mapView.zoomTo(reviewArea);
+        activeReviewArea = mappedArea;
+        applyActiveReviewZoom();
         reviewHighlight = new CandidateHighlight("Mapped review " + number, shape, mappedArea);
         map.mapView.addTemporaryLayer(reviewHighlight);
         reviewHighlightVisible = true;
@@ -577,7 +731,7 @@ final class TaskReconnaissancePanel extends JPanel {
         map.mapView.repaint();
         state.setForeground(new Color(150, 65, 0));
         state.setText("Mapped building " + number
-                + " has weak visual evidence in this imagery. Check imagery age, obstruction and alignment before considering any OSM edit.");
+                + " has weak visual evidence in this imagery. Check imagery age, obstruction and alignment before considering any OSM edit. Use Closer or Wider to adjust the review view.");
     }
 
     private void recordMappedReviewDecision(int number, MappedReviewDecision decision) {
@@ -587,6 +741,18 @@ final class TaskReconnaissancePanel extends JPanel {
         }
         ViewportAnchor anchor = captureAdjacentMappedReviewAnchor(number);
         item.decision = decision;
+        rememberReviewedArea(item.mappedArea);
+        if (decision == MappedReviewDecision.OUTSIDE_AREA) {
+            clearGeometryEdits(item.geometryEdits);
+            updateMappedReviewControls(item);
+            clearReviewHighlight();
+            state.setForeground(new Color(0, 105, 45));
+            state.setText("Mapped review " + number
+                    + " marked Outside my area and removed from future scans of this task. No learning example was saved.");
+            updateSummary();
+            rebuildChecklistPreservingAnchor(anchor);
+            return;
+        }
         boolean building = decision == MappedReviewDecision.CONFIRMED_BUILDING;
         if (!building) {
             clearGeometryEdits(item.geometryEdits);
@@ -623,6 +789,7 @@ final class TaskReconnaissancePanel extends JPanel {
             sharedLearningStore.removeQueued(item.sharedEventId);
             learningChanged.run();
         }
+        reviewedCandidateAreas.remove(item.mappedArea);
         item.decision = MappedReviewDecision.UNREVIEWED;
         item.learningRecorded = false;
         item.sharedEventId = null;
@@ -641,15 +808,21 @@ final class TaskReconnaissancePanel extends JPanel {
         item.decisionButtons.setVisible(undecided);
         item.confirm.setEnabled(undecided && item.reviewed);
         item.notBuilding.setEnabled(undecided && item.reviewed);
+        item.outsideArea.setEnabled(undecided && item.reviewed);
+        item.outsideArea.setVisible(undecided);
         item.restore.setVisible(!undecided);
         item.geometryEdits.panel.setVisible(item.reviewed
-                && item.decision != MappedReviewDecision.NOT_A_BUILDING);
+                && item.decision != MappedReviewDecision.NOT_A_BUILDING
+                && item.decision != MappedReviewDecision.OUTSIDE_AREA);
         if (item.decision == MappedReviewDecision.CONFIRMED_BUILDING) {
             item.decisionLabel.setText(tr("Confirmed: building"));
             item.decisionLabel.setForeground(new Color(0, 105, 45));
         } else if (item.decision == MappedReviewDecision.NOT_A_BUILDING) {
             item.decisionLabel.setText(tr("Marked: not a building — manual OSM correction required"));
             item.decisionLabel.setForeground(new Color(175, 40, 35));
+        } else if (item.decision == MappedReviewDecision.OUTSIDE_AREA) {
+            item.decisionLabel.setText(tr("Hidden: outside my area — not used for learning"));
+            item.decisionLabel.setForeground(new Color(95, 95, 95));
         } else {
             item.decisionLabel.setText(item.reviewed ? tr("Decision needed")
                     : tr("Decision: not reviewed"));
@@ -658,10 +831,9 @@ final class TaskReconnaissancePanel extends JPanel {
     }
 
     private void toggleMappedReviewHighlight(int number,
-            BuildingCandidateScanner.Shape shape, ProjectionBounds mappedArea,
-            ProjectionBounds reviewArea) {
+            BuildingCandidateScanner.Shape shape, ProjectionBounds mappedArea) {
         if (reviewHighlight == null || activeMappedReviewNumber != number) {
-            reviewMappedBuilding(number, shape, mappedArea, reviewArea);
+            reviewMappedBuilding(number, shape, mappedArea);
             return;
         }
         toggleReviewHighlight();
@@ -690,6 +862,20 @@ final class TaskReconnaissancePanel extends JPanel {
                         reviewedCandidateAreas.size()));
         checklist.add(rescanButton);
         checklist.add(Box.createVerticalStrut(7));
+        if (candidateItems.isEmpty() && mappedReviewItems.isEmpty()) {
+            checklist.add(wrappingLabel("No unmapped candidates met the conservative review threshold in this rendered view."));
+            checklist.setVisible(true);
+            return;
+        }
+        JLabel viewHeading = new JLabel("<html><b>Selected building view</b></html>");
+        viewHeading.setAlignmentX(Component.LEFT_ALIGNMENT);
+        checklist.add(viewHeading);
+        checklist.add(Box.createVerticalStrut(3));
+        highlightToggleButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+        checklist.add(highlightToggleButton);
+        checklist.add(Box.createVerticalStrut(4));
+        checklist.add(reviewZoomControls);
+        checklist.add(Box.createVerticalStrut(7));
         int mappedUnreviewed = mappedReviewCount(MappedReviewDecision.UNREVIEWED);
         if (mappedUnreviewed > 0) {
             JLabel mappedHeading = new JLabel("<html><b>Mapped buildings to review ("
@@ -709,40 +895,16 @@ final class TaskReconnaissancePanel extends JPanel {
                 confirmedMappedExpanded);
         addMappedReviewSection("mapped objects marked not a building",
                 MappedReviewDecision.NOT_A_BUILDING, notBuildingMappedExpanded);
-        if (candidateItems.isEmpty() && mappedReviewItems.isEmpty()) {
-            checklist.add(wrappingLabel("No unmapped candidates met the conservative review threshold in this rendered view."));
-            checklist.setVisible(true);
-            return;
-        }
-        highlightToggleButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-        checklist.add(highlightToggleButton);
-        checklist.add(Box.createVerticalStrut(7));
-
+        addMappedReviewSection("mapped reviews outside my area",
+                MappedReviewDecision.OUTSIDE_AREA, outsideMappedExpanded);
         addCandidateSection("Candidates to review", CandidateReviewDecisions.Decision.UNREVIEWED);
         addCandidateSection("Accepted — awaiting manual mapping", CandidateReviewDecisions.Decision.ACCEPTED);
         addCandidateSection("Mapped during this review", CandidateReviewDecisions.Decision.MAPPED);
 
-        int rejected = reviewDecisions.count(CandidateReviewDecisions.Decision.REJECTED);
-        if (rejected > 0) {
-            JButton rejectedToggle = SidebarButtons.create((rejectedExpanded ? "Hide" : "Show")
-                    + " rejected candidates (" + rejected + ")");
-            rejectedToggle.setAlignmentX(Component.LEFT_ALIGNMENT);
-            rejectedToggle.addActionListener(event -> {
-                rejectedExpanded = !rejectedExpanded;
-                rebuildChecklistPreservingViewport();
-            });
-            checklist.add(rejectedToggle);
-            checklist.add(Box.createVerticalStrut(5));
-            if (rejectedExpanded) {
-                for (CandidateReviewItem item : candidateItems) {
-                    if (reviewDecisions.get(item.candidateNumber)
-                            == CandidateReviewDecisions.Decision.REJECTED) {
-                        checklist.add(item.row);
-                        checklist.add(Box.createVerticalStrut(5));
-                    }
-                }
-            }
-        }
+        addCollapsibleCandidateSection("outside-area candidates",
+                CandidateReviewDecisions.Decision.OUTSIDE_AREA, outsideCandidatesExpanded);
+        addCollapsibleCandidateSection("rejected candidates",
+                CandidateReviewDecisions.Decision.REJECTED, rejectedExpanded);
         checklist.setVisible(true);
         checklist.revalidate();
         checklist.repaint();
@@ -760,8 +922,10 @@ final class TaskReconnaissancePanel extends JPanel {
         toggle.addActionListener(event -> {
             if (decision == MappedReviewDecision.CONFIRMED_BUILDING) {
                 confirmedMappedExpanded = !confirmedMappedExpanded;
-            } else {
+            } else if (decision == MappedReviewDecision.NOT_A_BUILDING) {
                 notBuildingMappedExpanded = !notBuildingMappedExpanded;
+            } else {
+                outsideMappedExpanded = !outsideMappedExpanded;
             }
             rebuildChecklistPreservingViewport();
         });
@@ -772,6 +936,36 @@ final class TaskReconnaissancePanel extends JPanel {
         }
         for (MappedReviewItem item : mappedReviewItems) {
             if (item.decision == decision) {
+                checklist.add(item.row);
+                checklist.add(Box.createVerticalStrut(5));
+            }
+        }
+    }
+
+    private void addCollapsibleCandidateSection(String title,
+            CandidateReviewDecisions.Decision decision, boolean expanded) {
+        int count = reviewDecisions.count(decision);
+        if (count < 1) {
+            return;
+        }
+        JButton toggle = SidebarButtons.create((expanded ? "Hide " : "Show ")
+                + title + " (" + count + ")");
+        toggle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        toggle.addActionListener(event -> {
+            if (decision == CandidateReviewDecisions.Decision.REJECTED) {
+                rejectedExpanded = !rejectedExpanded;
+            } else {
+                outsideCandidatesExpanded = !outsideCandidatesExpanded;
+            }
+            rebuildChecklistPreservingViewport();
+        });
+        checklist.add(toggle);
+        checklist.add(Box.createVerticalStrut(5));
+        if (!expanded) {
+            return;
+        }
+        for (CandidateReviewItem item : candidateItems) {
+            if (reviewDecisions.get(item.candidateNumber) == decision) {
                 checklist.add(item.row);
                 checklist.add(Box.createVerticalStrut(5));
             }
@@ -847,7 +1041,9 @@ final class TaskReconnaissancePanel extends JPanel {
         BuildingCandidateScanner.Result result = displayedResult;
         int highRectangular = result.count(BuildingCandidateScanner.Shape.RECTANGULAR, true);
         int highRound = result.count(BuildingCandidateScanner.Shape.ROUND, true);
-        int uncertain = result.getCandidates().size() - highRectangular - highRound;
+        int highLShaped = result.count(BuildingCandidateScanner.Shape.L_SHAPED, true);
+        int uncertain = result.getCandidates().size()
+                - highRectangular - highRound - highLShaped;
         String scopeLabel = capture.scope == ScanScope.VISIBLE_AREA
                 ? "Visible-area scan — counts below cover only the displayed part of the task."
                 : "Complete-task scan.";
@@ -859,13 +1055,16 @@ final class TaskReconnaissancePanel extends JPanel {
                 + "<b>Mapped-building review:</b> "
                 + mappedReviewCount(MappedReviewDecision.UNREVIEWED) + " awaiting review, "
                 + mappedReviewCount(MappedReviewDecision.CONFIRMED_BUILDING) + " confirmed, "
-                + mappedReviewCount(MappedReviewDecision.NOT_A_BUILDING) + " marked not a building.<br>"
+                + mappedReviewCount(MappedReviewDecision.NOT_A_BUILDING) + " marked not a building, "
+                + mappedReviewCount(MappedReviewDecision.OUTSIDE_AREA) + " outside area.<br>"
                 + "<b>Possible unmapped candidates:</b> " + highRectangular
-                + " rectangular, " + highRound + " round, " + uncertain
+                + " rectangular, " + highRound + " round, " + highLShaped
+                + " L-shaped, " + uncertain
                 + " uncertain.<br><b>Review decisions:</b> "
                 + reviewDecisions.count(CandidateReviewDecisions.Decision.ACCEPTED) + " awaiting mapping, "
                 + reviewDecisions.count(CandidateReviewDecisions.Decision.MAPPED) + " mapped, "
                 + reviewDecisions.count(CandidateReviewDecisions.Decision.REJECTED) + " rejected, "
+                + reviewDecisions.count(CandidateReviewDecisions.Decision.OUTSIDE_AREA) + " outside area, "
                 + reviewDecisions.count(CandidateReviewDecisions.Decision.UNREVIEWED) + " not reviewed."
                 + "<br><i>The candidate line is an estimate from the currently rendered imagery; review decisions do not edit OSM.</i></div></html>");
     }
@@ -924,7 +1123,8 @@ final class TaskReconnaissancePanel extends JPanel {
     }
 
     private void reviewCandidate(int candidateNumber, BuildingCandidateScanner.Shape shape,
-            ProjectionBounds candidateArea, ProjectionBounds reviewArea) {
+            BuildingCandidateScanner.LCorner lCorner, double armFractionX,
+            double armFractionY, ProjectionBounds candidateArea) {
         MapFrame map = MainApplication.getMap();
         if (map == null || map.mapView == null) {
             showError("The JOSM map view is not available.");
@@ -932,8 +1132,10 @@ final class TaskReconnaissancePanel extends JPanel {
         }
         clearReviewHighlight();
         MapView mapView = map.mapView;
-        mapView.zoomTo(reviewArea);
-        reviewHighlight = new CandidateHighlight(candidateNumber, shape, candidateArea);
+        activeReviewArea = candidateArea;
+        applyActiveReviewZoom();
+        reviewHighlight = new CandidateHighlight(candidateNumber, shape, lCorner,
+                armFractionX, armFractionY, candidateArea);
         mapView.addTemporaryLayer(reviewHighlight);
         reviewHighlightVisible = true;
         activeCandidateNumber = candidateNumber;
@@ -945,7 +1147,7 @@ final class TaskReconnaissancePanel extends JPanel {
         mapView.repaint();
         state.setForeground(new Color(0, 105, 45));
         state.setText("Candidate " + candidateNumber
-                + " is highlighted. Inspect the imagery before deciding whether to map it.");
+                + " is highlighted. Inspect the imagery before deciding whether to map it. Use Closer or Wider to adjust the review view.");
     }
 
     private void recordDecision(int candidateNumber, CandidateReviewDecisions.Decision decision) {
@@ -969,12 +1171,15 @@ final class TaskReconnaissancePanel extends JPanel {
         if (decision == CandidateReviewDecisions.Decision.ACCEPTED) {
             state.setText("Candidate " + candidateNumber
                     + " accepted and moved to Awaiting manual mapping.");
-        } else {
+        } else if (decision == CandidateReviewDecisions.Decision.REJECTED) {
             state.setText("Candidate " + candidateNumber
                     + " rejected and removed from the active review list."
                     + (item.negativeLearned
                             ? " It was saved as a negative learning example."
                             : " The per-task learning limit has already been reached."));
+        } else {
+            state.setText("Candidate " + candidateNumber
+                    + " marked Outside my area and removed from future scans of this task. No learning example was saved.");
         }
         state.setForeground(new Color(0, 105, 45));
         updateCandidateControls(item);
@@ -987,16 +1192,20 @@ final class TaskReconnaissancePanel extends JPanel {
         CandidateReviewDecisions.Decision decision = reviewDecisions.get(item.candidateNumber);
         boolean decisionAvailable = item.reviewed
                 && decision != CandidateReviewDecisions.Decision.REJECTED
-                && decision != CandidateReviewDecisions.Decision.MAPPED;
+                && decision != CandidateReviewDecisions.Decision.MAPPED
+                && decision != CandidateReviewDecisions.Decision.OUTSIDE_AREA;
         item.decisionButtons.setVisible(decisionAvailable);
         item.accept.setEnabled(decisionAvailable
                 && decision != CandidateReviewDecisions.Decision.ACCEPTED);
         item.reject.setEnabled(decisionAvailable);
+        item.outsideArea.setEnabled(decisionAvailable);
+        item.outsideArea.setVisible(decisionAvailable);
         item.map.setVisible(decision == CandidateReviewDecisions.Decision.ACCEPTED);
         item.checkMapped.setVisible(decision == CandidateReviewDecisions.Decision.ACCEPTED);
         item.geometryEdits.panel.setVisible(decision == CandidateReviewDecisions.Decision.MAPPED);
         item.restore.setVisible(decision == CandidateReviewDecisions.Decision.REJECTED
-                || decision == CandidateReviewDecisions.Decision.MAPPED);
+                || decision == CandidateReviewDecisions.Decision.MAPPED
+                || decision == CandidateReviewDecisions.Decision.OUTSIDE_AREA);
         if (decision == CandidateReviewDecisions.Decision.ACCEPTED) {
             item.decisionLabel.setText(tr("Accepted: awaiting manual mapping"));
             item.decisionLabel.setForeground(new Color(0, 115, 55));
@@ -1006,6 +1215,9 @@ final class TaskReconnaissancePanel extends JPanel {
         } else if (decision == CandidateReviewDecisions.Decision.MAPPED) {
             item.decisionLabel.setText(tr("Mapped: building outline found"));
             item.decisionLabel.setForeground(new Color(0, 90, 145));
+        } else if (decision == CandidateReviewDecisions.Decision.OUTSIDE_AREA) {
+            item.decisionLabel.setText(tr("Hidden: outside my area — not used for learning"));
+            item.decisionLabel.setForeground(new Color(95, 95, 95));
         } else {
             item.decisionLabel.setText(item.reviewed
                     ? tr("Decision needed") : tr("Decision: not reviewed"));
@@ -1016,7 +1228,8 @@ final class TaskReconnaissancePanel extends JPanel {
     private void mapCandidate(int candidateNumber) {
         restoreMappedBuildingOutlines();
         CandidateReviewItem item = candidateItem(candidateNumber);
-        reviewCandidate(candidateNumber, item.shape, item.candidateArea, item.reviewArea);
+        reviewCandidate(candidateNumber, item.shape, item.lCorner, item.armFractionX,
+                item.armFractionY, item.candidateArea);
         toggleReviewHighlight();
         state.setForeground(new Color(0, 105, 45));
         state.setText("Candidate " + candidateNumber
@@ -1079,7 +1292,8 @@ final class TaskReconnaissancePanel extends JPanel {
                 ? CandidateReviewDecisions.Decision.ACCEPTED
                 : CandidateReviewDecisions.Decision.UNREVIEWED;
         reviewDecisions.set(candidateNumber, restored);
-        if (previous == CandidateReviewDecisions.Decision.REJECTED) {
+        if (previous == CandidateReviewDecisions.Decision.REJECTED
+                || previous == CandidateReviewDecisions.Decision.OUTSIDE_AREA) {
             reviewedCandidateAreas.remove(item.candidateArea);
         }
         if (previous == CandidateReviewDecisions.Decision.REJECTED && item.negativeLearned) {
@@ -1112,7 +1326,9 @@ final class TaskReconnaissancePanel extends JPanel {
         for (CandidateReviewItem item : candidateItems) {
             if (item.candidateNumber > candidateNumber
                     && reviewDecisions.get(item.candidateNumber)
-                            != CandidateReviewDecisions.Decision.REJECTED) {
+                            != CandidateReviewDecisions.Decision.REJECTED
+                    && reviewDecisions.get(item.candidateNumber)
+                            != CandidateReviewDecisions.Decision.OUTSIDE_AREA) {
                 anchorItem = item;
                 break;
             }
@@ -1122,7 +1338,9 @@ final class TaskReconnaissancePanel extends JPanel {
                 CandidateReviewItem item = candidateItems.get(index);
                 if (item.candidateNumber < candidateNumber
                         && reviewDecisions.get(item.candidateNumber)
-                                != CandidateReviewDecisions.Decision.REJECTED) {
+                                != CandidateReviewDecisions.Decision.REJECTED
+                        && reviewDecisions.get(item.candidateNumber)
+                                != CandidateReviewDecisions.Decision.OUTSIDE_AREA) {
                     anchorItem = item;
                     break;
                 }
@@ -1378,6 +1596,8 @@ final class TaskReconnaissancePanel extends JPanel {
 
     private void clearReviewHighlight() {
         if (reviewHighlight == null) {
+            activeReviewArea = null;
+            updateReviewZoomControls();
             return;
         }
         MapFrame map = MainApplication.getMap();
@@ -1389,8 +1609,10 @@ final class TaskReconnaissancePanel extends JPanel {
         reviewHighlightVisible = false;
         activeCandidateNumber = -1;
         activeMappedReviewNumber = -1;
+        activeReviewArea = null;
         highlightToggleButton.setEnabled(false);
         highlightToggleButton.setText(tr("Hide candidate outline"));
+        updateReviewZoomControls();
     }
 
     private static Way findBoundaryWay(TaskReference reference, MapView mapView) {
@@ -1518,6 +1740,10 @@ final class TaskReconnaissancePanel extends JPanel {
             int y = box.y - crop.y;
             if (candidate.getShape() == BuildingCandidateScanner.Shape.ROUND) {
                 graphics.drawOval(x, y, box.width, box.height);
+            } else if (candidate.getShape() == BuildingCandidateScanner.Shape.L_SHAPED) {
+                graphics.drawPolygon(lShapePolygon(x, y, box.width, box.height,
+                        candidate.getLCorner(), candidate.getArmFractionX(),
+                        candidate.getArmFractionY()));
             } else {
                 graphics.drawRect(x, y, box.width, box.height);
             }
@@ -1537,6 +1763,48 @@ final class TaskReconnaissancePanel extends JPanel {
         return scaled;
     }
 
+    private static String candidateShapeLabel(BuildingCandidateScanner.Shape shape) {
+        if (shape == BuildingCandidateScanner.Shape.ROUND) {
+            return "round";
+        }
+        return shape == BuildingCandidateScanner.Shape.L_SHAPED
+                ? "L-shaped" : "rectangular";
+    }
+
+    private static Polygon lShapePolygon(int x, int y, int width, int height,
+            BuildingCandidateScanner.LCorner corner, double armFractionX,
+            double armFractionY) {
+        int right = x + width;
+        int bottom = y + height;
+        BuildingCandidateScanner.LCorner effective = corner == null
+                ? BuildingCandidateScanner.LCorner.TOP_RIGHT : corner;
+        int armX = Math.max(1, Math.min(width - 1,
+                (int) Math.round(width * armFractionX)));
+        int armY = Math.max(1, Math.min(height - 1,
+                (int) Math.round(height * armFractionY)));
+        int middleX = (effective == BuildingCandidateScanner.LCorner.TOP_RIGHT
+                || effective == BuildingCandidateScanner.LCorner.BOTTOM_RIGHT)
+                ? x + armX : right - armX;
+        int middleY = (effective == BuildingCandidateScanner.LCorner.TOP_RIGHT
+                || effective == BuildingCandidateScanner.LCorner.TOP_LEFT)
+                ? bottom - armY : y + armY;
+        switch (effective) {
+        case TOP_RIGHT:
+            return new Polygon(new int[] {x, middleX, middleX, right, right, x},
+                    new int[] {y, y, middleY, middleY, bottom, bottom}, 6);
+        case BOTTOM_RIGHT:
+            return new Polygon(new int[] {x, right, right, middleX, middleX, x},
+                    new int[] {y, y, middleY, middleY, bottom, bottom}, 6);
+        case TOP_LEFT:
+            return new Polygon(new int[] {middleX, right, right, x, x, middleX},
+                    new int[] {y, y, bottom, bottom, middleY, middleY}, 6);
+        case BOTTOM_LEFT:
+        default:
+            return new Polygon(new int[] {x, right, right, middleX, middleX, x},
+                    new int[] {y, y, bottom, bottom, middleY, middleY}, 6);
+        }
+    }
+
     private void reset() {
         restoreMappedBuildingOutlines();
         clearReviewHighlight();
@@ -1546,8 +1814,10 @@ final class TaskReconnaissancePanel extends JPanel {
         candidateItems.clear();
         mappedReviewItems.clear();
         rejectedExpanded = false;
+        outsideCandidatesExpanded = false;
         confirmedMappedExpanded = false;
         notBuildingMappedExpanded = false;
+        outsideMappedExpanded = false;
         displayedCapture = null;
         displayedResult = null;
         displayedMode = selectedScanMode();
@@ -1699,14 +1969,17 @@ final class TaskReconnaissancePanel extends JPanel {
     private static final class CandidateReviewItem {
         private final int candidateNumber;
         private final BuildingCandidateScanner.Shape shape;
+        private final BuildingCandidateScanner.LCorner lCorner;
+        private final double armFractionX;
+        private final double armFractionY;
         private final ProjectionBounds candidateArea;
-        private final ProjectionBounds reviewArea;
         private final BuildingCandidateScanner.Evidence evidence;
         private final JPanel row;
         private final JLabel decisionLabel;
         private final JPanel decisionButtons;
         private final JButton accept;
         private final JButton reject;
+        private final JButton outsideArea;
         private final JButton map;
         private final JButton checkMapped;
         private final JButton restore;
@@ -1717,21 +1990,25 @@ final class TaskReconnaissancePanel extends JPanel {
         private String sharedEventId;
 
         CandidateReviewItem(int candidateNumber, BuildingCandidateScanner.Shape shape,
-                ProjectionBounds candidateArea, ProjectionBounds reviewArea,
+                BuildingCandidateScanner.LCorner lCorner, double armFractionX,
+                double armFractionY, ProjectionBounds candidateArea,
                 BuildingCandidateScanner.Evidence evidence, JPanel row,
                 JLabel decisionLabel, JPanel decisionButtons, JButton accept, JButton reject,
-                JButton map, JButton checkMapped, JButton restore,
+                JButton outsideArea, JButton map, JButton checkMapped, JButton restore,
                 GeometryEditControls geometryEdits) {
             this.candidateNumber = candidateNumber;
             this.shape = shape;
+            this.lCorner = lCorner;
+            this.armFractionX = armFractionX;
+            this.armFractionY = armFractionY;
             this.candidateArea = candidateArea;
-            this.reviewArea = reviewArea;
             this.evidence = evidence;
             this.row = row;
             this.decisionLabel = decisionLabel;
             this.decisionButtons = decisionButtons;
             this.accept = accept;
             this.reject = reject;
+            this.outsideArea = outsideArea;
             this.map = map;
             this.checkMapped = checkMapped;
             this.restore = restore;
@@ -1742,18 +2019,21 @@ final class TaskReconnaissancePanel extends JPanel {
     private enum MappedReviewDecision {
         UNREVIEWED,
         CONFIRMED_BUILDING,
-        NOT_A_BUILDING
+        NOT_A_BUILDING,
+        OUTSIDE_AREA
     }
 
     private static final class MappedReviewItem {
         private final int number;
         private final BuildingCandidateScanner.Shape shape;
         private final BuildingCandidateScanner.Evidence evidence;
+        private final ProjectionBounds mappedArea;
         private final JPanel row;
         private final JLabel decisionLabel;
         private final JPanel decisionButtons;
         private final JButton confirm;
         private final JButton notBuilding;
+        private final JButton outsideArea;
         private final JButton restore;
         private final GeometryEditControls geometryEdits;
         private MappedReviewDecision decision = MappedReviewDecision.UNREVIEWED;
@@ -1762,17 +2042,21 @@ final class TaskReconnaissancePanel extends JPanel {
         private String sharedEventId;
 
         MappedReviewItem(int number, BuildingCandidateScanner.Shape shape,
-                BuildingCandidateScanner.Evidence evidence, JPanel row, JLabel decisionLabel,
+                BuildingCandidateScanner.Evidence evidence, ProjectionBounds mappedArea,
+                JPanel row, JLabel decisionLabel,
                 JPanel decisionButtons, JButton confirm,
-                JButton notBuilding, JButton restore, GeometryEditControls geometryEdits) {
+                JButton notBuilding, JButton outsideArea, JButton restore,
+                GeometryEditControls geometryEdits) {
             this.number = number;
             this.shape = shape;
             this.evidence = evidence;
+            this.mappedArea = mappedArea;
             this.row = row;
             this.decisionLabel = decisionLabel;
             this.decisionButtons = decisionButtons;
             this.confirm = confirm;
             this.notBuilding = notBuilding;
+            this.outsideArea = outsideArea;
             this.restore = restore;
             this.geometryEdits = geometryEdits;
         }
@@ -1865,17 +2149,31 @@ final class TaskReconnaissancePanel extends JPanel {
     private static final class CandidateHighlight implements MapViewPaintable {
         private final String label;
         private final BuildingCandidateScanner.Shape shape;
+        private final BuildingCandidateScanner.LCorner lCorner;
+        private final double armFractionX;
+        private final double armFractionY;
         private final ProjectionBounds bounds;
 
         CandidateHighlight(int candidateNumber, BuildingCandidateScanner.Shape shape,
-                ProjectionBounds bounds) {
-            this("Candidate " + candidateNumber, shape, bounds);
+                BuildingCandidateScanner.LCorner lCorner, double armFractionX,
+                double armFractionY, ProjectionBounds bounds) {
+            this("Candidate " + candidateNumber, shape, lCorner, armFractionX, armFractionY,
+                    bounds);
         }
 
         CandidateHighlight(String label, BuildingCandidateScanner.Shape shape,
                 ProjectionBounds bounds) {
+            this(label, shape, null, 0.50, 0.50, bounds);
+        }
+
+        CandidateHighlight(String label, BuildingCandidateScanner.Shape shape,
+                BuildingCandidateScanner.LCorner lCorner, double armFractionX,
+                double armFractionY, ProjectionBounds bounds) {
             this.label = label;
             this.shape = shape;
+            this.lCorner = lCorner;
+            this.armFractionX = armFractionX;
+            this.armFractionY = armFractionY;
             this.bounds = bounds;
         }
 
@@ -1895,6 +2193,9 @@ final class TaskReconnaissancePanel extends JPanel {
                 marked.setColor(new Color(255, 55, 25, 55));
                 if (shape == BuildingCandidateScanner.Shape.ROUND) {
                     marked.fillOval(x, y, width, height);
+                } else if (shape == BuildingCandidateScanner.Shape.L_SHAPED) {
+                    marked.fillPolygon(lShapePolygon(x, y, width, height, lCorner,
+                            armFractionX, armFractionY));
                 } else {
                     marked.fillRect(x, y, width, height);
                 }
@@ -1902,6 +2203,9 @@ final class TaskReconnaissancePanel extends JPanel {
                 marked.setColor(new Color(255, 45, 20));
                 if (shape == BuildingCandidateScanner.Shape.ROUND) {
                     marked.drawOval(x, y, width, height);
+                } else if (shape == BuildingCandidateScanner.Shape.L_SHAPED) {
+                    marked.drawPolygon(lShapePolygon(x, y, width, height, lCorner,
+                            armFractionX, armFractionY));
                 } else {
                     marked.drawRect(x, y, width, height);
                 }

@@ -66,11 +66,11 @@ final class BuildingCandidateScanner {
             // The hard edge-coverage gates need a reasonably close fit. A finer
             // stride avoids missing a real roof simply because the coarse grid
             // landed a few pixels outside its perimeter.
-            // Conservative mode samples more precisely so a genuinely strong roof
-            // can meet its higher threshold without a coarse grid landing just
-            // outside the visible edge. The looser modes retain the faster grid.
-            int stride = Math.max(3, size
-                    / (effectiveMode == ScanMode.CONSERVATIVE ? 12 : 8));
+            // Conservative needs precise placement to meet its strict threshold.
+            // Exploratory now uses the same placement precision: lower thresholds
+            // were ineffective when its coarser grid skipped across a clear roof.
+            int strideDivisor = effectiveMode == ScanMode.BALANCED ? 8 : 12;
+            int stride = Math.max(3, size / strideDivisor);
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals, size, size, stride,
                     learningProfile, geometryProfile, effectiveMode, exclusions, sharedProfile);
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
@@ -85,8 +85,53 @@ final class BuildingCandidateScanner {
             scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
                     size, (int) Math.round(size * 1.45), stride, learningProfile, geometryProfile,
                     effectiveMode, exclusions, sharedProfile);
-            scanCircles(integral, taskBoundary, mappedBuildings, proposals, size, stride,
-                    learningProfile, geometryProfile, effectiveMode, exclusions, sharedProfile);
+            if (effectiveMode == ScanMode.EXPLORATORY) {
+                scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
+                        (int) Math.round(size * 1.70), size, stride,
+                        learningProfile, geometryProfile, effectiveMode, exclusions,
+                        sharedProfile);
+                scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
+                        size, (int) Math.round(size * 1.70), stride,
+                        learningProfile, geometryProfile, effectiveMode, exclusions,
+                        sharedProfile);
+            }
+            scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
+                    size * 2, size, stride, learningProfile, geometryProfile,
+                    effectiveMode, exclusions, sharedProfile);
+            scanRectangles(integral, taskBoundary, mappedBuildings, proposals,
+                    size, size * 2, stride, learningProfile, geometryProfile,
+                    effectiveMode, exclusions, sharedProfile);
+            if (size >= 26) {
+                scanLShapes(integral, taskBoundary, mappedBuildings, proposals, size, size,
+                        stride, learningProfile, effectiveMode, exclusions, sharedProfile,
+                        0.50, 0.50);
+                if (effectiveMode == ScanMode.EXPLORATORY) {
+                    int elongated = (int) Math.round(size * 1.33);
+                    scanLShapes(integral, taskBoundary, mappedBuildings, proposals,
+                            elongated, size, stride, learningProfile, effectiveMode, exclusions,
+                            sharedProfile, 0.50, 0.50);
+                    scanLShapes(integral, taskBoundary, mappedBuildings, proposals,
+                            size, elongated, stride, learningProfile, effectiveMode, exclusions,
+                            sharedProfile, 0.50, 0.50);
+                    scanLShapes(integral, taskBoundary, mappedBuildings, proposals, size, size,
+                            stride, learningProfile, effectiveMode, exclusions, sharedProfile,
+                            0.38, 0.62);
+                    scanLShapes(integral, taskBoundary, mappedBuildings, proposals, size, size,
+                            stride, learningProfile, effectiveMode, exclusions, sharedProfile,
+                            0.62, 0.38);
+                    scanLShapes(integral, taskBoundary, mappedBuildings, proposals,
+                            elongated, size, stride, learningProfile, effectiveMode, exclusions,
+                            sharedProfile, 0.38, 0.62);
+                    scanLShapes(integral, taskBoundary, mappedBuildings, proposals,
+                            size, elongated, stride, learningProfile, effectiveMode, exclusions,
+                            sharedProfile, 0.62, 0.38);
+                }
+            }
+            if (size >= 19) {
+                scanCircles(integral, taskBoundary, mappedBuildings, proposals, size, stride,
+                        learningProfile, geometryProfile, effectiveMode, exclusions,
+                        sharedProfile);
+            }
         }
 
         proposals.sort(Comparator.comparingInt(Candidate::getConfidence).reversed());
@@ -94,7 +139,9 @@ final class BuildingCandidateScanner {
         for (Candidate proposal : proposals) {
             boolean duplicate = false;
             for (Candidate existing : retained) {
-                if (overlap(proposal.bounds, existing.bounds) > 0.28
+                // A small high-scoring fragment inside a long roof is not a
+                // duplicate of the correctly sized whole-building proposal.
+                if (overlap(proposal.bounds, existing.bounds) > 0.42
                         || centreDistance(proposal.bounds, existing.bounds)
                         < Math.min(proposal.bounds.width, existing.bounds.width) * 0.55) {
                     duplicate = true;
@@ -109,6 +156,44 @@ final class BuildingCandidateScanner {
             }
         }
         return new Result(retained);
+    }
+
+    private static void scanLShapes(IntegralImage integral, Polygon boundary,
+            List<Polygon> mapped, List<Candidate> proposals, int width, int height, int stride,
+            LearningProfile learningProfile, ScanMode mode, List<Rectangle> reviewedRegions,
+            SharedLearningProfile sharedProfile, double armFractionX,
+            double armFractionY) {
+        int marginX = Math.max(3, width / 4);
+        int marginY = Math.max(3, height / 4);
+        for (int y = marginY; y + height + marginY < integral.height; y += stride) {
+            for (int x = marginX; x + width + marginX < integral.width; x += stride) {
+                Rectangle box = new Rectangle(x, y, width, height);
+                if (!insideBoundary(boundary, box) || overlapsMapped(mapped, box)
+                        || overlapsReviewed(reviewedRegions, box)) {
+                    continue;
+                }
+                for (LCorner corner : LCorner.values()) {
+                    ScoredEvidence measurement = lShapeConfidence(integral, box, corner, mode,
+                            armFractionX, armFractionY);
+                    double confidence = learningProfile == null ? measurement.score
+                            : learningProfile.adjust(measurement.score, measurement.evidence);
+                    confidence = sharedProfile == null ? confidence
+                            : sharedProfile.adjust(confidence, measurement.evidence);
+                    int score = percent(confidence);
+                    boolean flexibleTemplate = width != height
+                            || Math.abs(armFractionX - 0.50) > 0.01
+                            || Math.abs(armFractionY - 0.50) > 0.01;
+                    int templateMargin = flexibleTemplate ? 4 : 0;
+                    if (score >= mode.minimumConfidence + templateMargin
+                            && percent(measurement.score)
+                                    >= mode.minimumBaseline + templateMargin) {
+                        proposals.add(new Candidate(Shape.L_SHAPED, score,
+                                percent(measurement.score), box, measurement.evidence, corner,
+                                armFractionX, armFractionY));
+                    }
+                }
+            }
+        }
     }
 
     static int[] candidateSizes(double metresPerPixel, int shortestImageSide) {
@@ -311,6 +396,221 @@ final class BuildingCandidateScanner {
         }
         return new ScoredEvidence(clamp(consistency * 0.08 + contrast * 0.18 + boundary * 0.24
                 + shadow * 0.32 + geometry * 0.18), evidence);
+    }
+
+    /** Scores a six-sided, axis-aligned L rather than relaxing the rectangle rules. */
+    private static ScoredEvidence lShapeConfidence(IntegralImage image, Rectangle box,
+            LCorner corner, ScanMode mode, double armFractionX, double armFractionY) {
+        int armX = Math.max(4, Math.min(box.width - 4,
+                (int) Math.round(box.width * armFractionX)));
+        int armY = Math.max(4, Math.min(box.height - 4,
+                (int) Math.round(box.height * armFractionY)));
+        Rectangle vertical;
+        Rectangle horizontal;
+        Rectangle notch;
+        switch (corner) {
+        case TOP_RIGHT:
+            vertical = new Rectangle(box.x, box.y, armX, box.height);
+            horizontal = new Rectangle(box.x, box.y + box.height - armY, box.width, armY);
+            notch = new Rectangle(box.x + armX, box.y, box.width - armX,
+                    box.height - armY);
+            break;
+        case BOTTOM_RIGHT:
+            vertical = new Rectangle(box.x, box.y, armX, box.height);
+            horizontal = new Rectangle(box.x, box.y, box.width, armY);
+            notch = new Rectangle(box.x + armX, box.y + armY, box.width - armX,
+                    box.height - armY);
+            break;
+        case TOP_LEFT:
+            vertical = new Rectangle(box.x + box.width - armX, box.y, armX, box.height);
+            horizontal = new Rectangle(box.x, box.y + box.height - armY, box.width, armY);
+            notch = new Rectangle(box.x, box.y, box.width - armX, box.height - armY);
+            break;
+        case BOTTOM_LEFT:
+        default:
+            vertical = new Rectangle(box.x + box.width - armX, box.y, armX, box.height);
+            horizontal = new Rectangle(box.x, box.y, box.width, armY);
+            notch = new Rectangle(box.x, box.y + armY, box.width - armX,
+                    box.height - armY);
+            break;
+        }
+
+        Rectangle joint = vertical.intersection(horizontal);
+        double verticalArea = vertical.width * (double) vertical.height;
+        double horizontalArea = horizontal.width * (double) horizontal.height;
+        double jointArea = joint.width * (double) joint.height;
+        double occupiedArea = verticalArea + horizontalArea - jointArea;
+        double verticalMean = image.mean(vertical);
+        double horizontalMean = image.mean(horizontal);
+        double jointMean = image.mean(joint);
+        double roofMean = (verticalMean * verticalArea + horizontalMean * horizontalArea
+                - jointMean * jointArea) / occupiedArea;
+        double wingDifference = Math.abs(verticalMean - horizontalMean);
+        double roofStd = Math.max(image.stdDev(vertical), image.stdDev(horizontal));
+        double roofGradient = Math.max(image.gradientMean(vertical), image.gradientMean(horizontal));
+        double colourConsistency = clamp(1.0 - Math.max(0, roofStd - 7.0) / 47.0);
+        double textureConsistency = clamp(1.0 - Math.max(0, roofGradient - 5.0) / 24.0);
+        double wingConsistency = clamp(1.0 - wingDifference / 24.0);
+        double consistency = Math.cbrt(colourConsistency * textureConsistency * wingConsistency);
+
+        int padding = Math.max(3, sizeOf(box) / 4);
+        Rectangle outer = new Rectangle(box.x - padding, box.y - padding,
+                box.width + padding * 2, box.height + padding * 2);
+        double outerMean = image.ringMean(outer, box);
+        double notchContrast = Math.abs(roofMean - image.mean(notch));
+        double outsideContrast = Math.abs(roofMean - outerMean);
+        double contrast = clamp((notchContrast * 0.65 + outsideContrast * 0.35) / 52.0);
+        boolean vegetation = strongVegetation(image, vertical)
+                || strongVegetation(image, horizontal);
+        if (vegetation || wingDifference > 18
+                || notchContrast < (mode == ScanMode.EXPLORATORY ? 12 : 16)
+                || consistency < mode.minimumConsistency || contrast < mode.minimumContrast) {
+            return new ScoredEvidence(0,
+                    new Evidence(consistency, contrast, 0, 0, 0));
+        }
+        double boundary = clamp(lBoundaryMean(image, box, corner, armX, armY) / 54.0);
+        double edgeCoverage = lEdgeCoverage(image, box, corner, armX, armY);
+        double innerEdgeCoverage = lInnerEdgeCoverage(image, box, corner, armX, armY);
+        double geometry = Math.sqrt(boundary * edgeCoverage)
+                * Math.sqrt(innerEdgeCoverage) * clamp(notchContrast / 42.0);
+        double shadow = shadowCue(roofMean, sideMeans(image, box, padding, padding));
+        Evidence evidence = new Evidence(consistency, contrast, boundary, shadow, geometry);
+        if (boundary < mode.minimumBoundary
+                || edgeCoverage < mode.minimumEdgeCoverage
+                || innerEdgeCoverage < (mode == ScanMode.CONSERVATIVE ? 0.68
+                        : mode == ScanMode.BALANCED ? 0.56 : 0.42)
+                || geometry < mode.minimumGeometry
+                || shadow < mode.minimumShadow
+                        * (mode == ScanMode.EXPLORATORY ? 1.0 : 0.50)) {
+            return new ScoredEvidence(0, evidence);
+        }
+        // The concave corner is highly specific evidence, while an L-shaped roof's
+        // shadow is often split across two wings. Weight its six-edge geometry more
+        // heavily than the rectangle detector weights a single shadow band.
+        return new ScoredEvidence(clamp(consistency * 0.14 + contrast * 0.24
+                + boundary * 0.20 + shadow * 0.16 + geometry * 0.26), evidence);
+    }
+
+    private static int sizeOf(Rectangle box) {
+        return Math.min(box.width, box.height);
+    }
+
+    private static double lBoundaryMean(IntegralImage image, Rectangle box, LCorner corner,
+            int armX, int armY) {
+        Polygon polygon = lPolygon(box, corner, armX, armY);
+        Samples gradients = new Samples();
+        samplePolygonEdges(image, polygon, gradients, false);
+        return gradients.mean();
+    }
+
+    private static double lEdgeCoverage(IntegralImage image, Rectangle box, LCorner corner,
+            int armX, int armY) {
+        Polygon polygon = lPolygon(box, corner, armX, armY);
+        Samples covered = new Samples();
+        samplePolygonEdges(image, polygon, covered, true);
+        return covered.mean();
+    }
+
+    private static double lInnerEdgeCoverage(IntegralImage image, Rectangle box,
+            LCorner corner, int armX, int armY) {
+        int left = box.x;
+        int top = box.y;
+        int right = box.x + box.width;
+        int bottom = box.y + box.height;
+        int middleX = (corner == LCorner.TOP_RIGHT || corner == LCorner.BOTTOM_RIGHT)
+                ? box.x + armX : box.x + box.width - armX;
+        int middleY = (corner == LCorner.TOP_RIGHT || corner == LCorner.TOP_LEFT)
+                ? box.y + box.height - armY : box.y + armY;
+        Samples covered = new Samples();
+        switch (corner) {
+        case TOP_RIGHT:
+            sampleLineCoverage(image, middleX, top, middleX, middleY, covered);
+            sampleLineCoverage(image, middleX, middleY, right, middleY, covered);
+            break;
+        case BOTTOM_RIGHT:
+            sampleLineCoverage(image, middleX, middleY, right, middleY, covered);
+            sampleLineCoverage(image, middleX, middleY, middleX, bottom, covered);
+            break;
+        case TOP_LEFT:
+            sampleLineCoverage(image, middleX, top, middleX, middleY, covered);
+            sampleLineCoverage(image, left, middleY, middleX, middleY, covered);
+            break;
+        case BOTTOM_LEFT:
+        default:
+            sampleLineCoverage(image, left, middleY, middleX, middleY, covered);
+            sampleLineCoverage(image, middleX, middleY, middleX, bottom, covered);
+            break;
+        }
+        return covered.mean();
+    }
+
+    private static void sampleLineCoverage(IntegralImage image, int x1, int y1,
+            int x2, int y2, Samples covered) {
+        int count = Math.max(5, Math.min(24, Math.max(Math.abs(x2 - x1),
+                Math.abs(y2 - y1))));
+        for (int index = 0; index < count; index++) {
+            double fraction = (index + 0.5) / count;
+            int x = (int) Math.round(x1 + (x2 - x1) * fraction);
+            int y = (int) Math.round(y1 + (y2 - y1) * fraction);
+            double strongest = 0;
+            for (int offsetY = -2; offsetY <= 2; offsetY++) {
+                for (int offsetX = -2; offsetX <= 2; offsetX++) {
+                    strongest = Math.max(strongest, image.gradient(x + offsetX, y + offsetY));
+                }
+            }
+            covered.add(strongest >= 16 ? 1 : 0);
+        }
+    }
+
+    private static void samplePolygonEdges(IntegralImage image, Polygon polygon,
+            Samples samples, boolean coverageOnly) {
+        for (int edge = 0; edge < polygon.npoints; edge++) {
+            int next = (edge + 1) % polygon.npoints;
+            int x1 = polygon.xpoints[edge];
+            int y1 = polygon.ypoints[edge];
+            int x2 = polygon.xpoints[next];
+            int y2 = polygon.ypoints[next];
+            int count = Math.max(4, Math.min(24, Math.max(Math.abs(x2 - x1),
+                    Math.abs(y2 - y1))));
+            for (int index = 0; index < count; index++) {
+                double fraction = (index + 0.5) / count;
+                int x = (int) Math.round(x1 + (x2 - x1) * fraction);
+                int y = (int) Math.round(y1 + (y2 - y1) * fraction);
+                double strongest = 0;
+                for (int offsetY = -2; offsetY <= 2; offsetY++) {
+                    for (int offsetX = -2; offsetX <= 2; offsetX++) {
+                        strongest = Math.max(strongest, image.gradient(x + offsetX, y + offsetY));
+                    }
+                }
+                samples.add(coverageOnly ? (strongest >= 16 ? 1 : 0) : strongest);
+            }
+        }
+    }
+
+    private static Polygon lPolygon(Rectangle box, LCorner corner, int armX, int armY) {
+        int left = box.x;
+        int top = box.y;
+        int right = box.x + box.width;
+        int bottom = box.y + box.height;
+        int middleX = (corner == LCorner.TOP_RIGHT || corner == LCorner.BOTTOM_RIGHT)
+                ? left + armX : right - armX;
+        int middleY = (corner == LCorner.TOP_RIGHT || corner == LCorner.TOP_LEFT)
+                ? bottom - armY : top + armY;
+        switch (corner) {
+        case TOP_RIGHT:
+            return new Polygon(new int[] {left, middleX, middleX, right, right, left},
+                    new int[] {top, top, middleY, middleY, bottom, bottom}, 6);
+        case BOTTOM_RIGHT:
+            return new Polygon(new int[] {left, right, right, middleX, middleX, left},
+                    new int[] {top, top, middleY, middleY, bottom, bottom}, 6);
+        case TOP_LEFT:
+            return new Polygon(new int[] {middleX, right, right, left, left, middleX},
+                    new int[] {top, top, bottom, bottom, middleY, middleY}, 6);
+        case BOTTOM_LEFT:
+        default:
+            return new Polygon(new int[] {left, right, right, middleX, middleX, left},
+                    new int[] {top, top, bottom, bottom, middleY, middleY}, 6);
+        }
     }
 
     private static ScoredEvidence circleConfidence(IntegralImage image, Rectangle box,
@@ -558,7 +858,15 @@ final class BuildingCandidateScanner {
 
     enum Shape {
         RECTANGULAR,
-        ROUND
+        ROUND,
+        L_SHAPED
+    }
+
+    enum LCorner {
+        TOP_LEFT,
+        TOP_RIGHT,
+        BOTTOM_LEFT,
+        BOTTOM_RIGHT
     }
 
     enum ScanMode {
@@ -620,14 +928,31 @@ final class BuildingCandidateScanner {
         private final int baselineConfidence;
         private final Rectangle bounds;
         private final Evidence evidence;
+        private final LCorner lCorner;
+        private final double armFractionX;
+        private final double armFractionY;
 
         Candidate(Shape shape, int confidence, int baselineConfidence, Rectangle bounds,
                 Evidence evidence) {
+            this(shape, confidence, baselineConfidence, bounds, evidence, null, 0.50, 0.50);
+        }
+
+        Candidate(Shape shape, int confidence, int baselineConfidence, Rectangle bounds,
+                Evidence evidence, LCorner lCorner) {
+            this(shape, confidence, baselineConfidence, bounds, evidence, lCorner, 0.50, 0.50);
+        }
+
+        Candidate(Shape shape, int confidence, int baselineConfidence, Rectangle bounds,
+                Evidence evidence, LCorner lCorner, double armFractionX,
+                double armFractionY) {
             this.shape = shape;
             this.confidence = confidence;
             this.baselineConfidence = baselineConfidence;
             this.bounds = new Rectangle(bounds);
             this.evidence = evidence;
+            this.lCorner = lCorner;
+            this.armFractionX = armFractionX;
+            this.armFractionY = armFractionY;
         }
 
         Shape getShape() { return shape; }
@@ -635,6 +960,9 @@ final class BuildingCandidateScanner {
         int getBaselineConfidence() { return baselineConfidence; }
         Rectangle getBounds() { return new Rectangle(bounds); }
         Evidence getEvidence() { return evidence; }
+        LCorner getLCorner() { return lCorner; }
+        double getArmFractionX() { return armFractionX; }
+        double getArmFractionY() { return armFractionY; }
         boolean isHighConfidence() { return confidence >= HIGH_CONFIDENCE; }
         String explanation() { return evidence == null ? "limited visual evidence"
                 : evidence.explanation(); }
