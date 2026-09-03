@@ -60,6 +60,7 @@ final class TaskReconnaissancePanel extends JPanel {
     private final JButton rescanButton = SidebarButtons.create(tr("Rescan after review"));
     private final JComboBox<BuildingCandidateScanner.ScanMode> scanMode = new JComboBox<>(
             BuildingCandidateScanner.ScanMode.values());
+    private final JLabel scanModeGuidance = wrappingLabel("");
     private final JButton highlightToggleButton = SidebarButtons.create(tr("Hide candidate outline"));
     private final JButton mappedBuildingsToggleButton = SidebarButtons.create(tr("Hide mapped building outlines"));
     private final JButton learnMissedButton = SidebarButtons.create(
@@ -112,10 +113,15 @@ final class TaskReconnaissancePanel extends JPanel {
                 preferences.get(PluginPreferences.PREFIX + "scan.mode", "CONSERVATIVE")));
         scanMode.setToolTipText(tr(
                 "Conservative requires strong evidence; Balanced shows moderate candidates; Exploratory deliberately includes weaker borderline possibilities."));
-        scanMode.addActionListener(event -> preferences.put(
-                PluginPreferences.PREFIX + "scan.mode", selectedScanMode().name()));
+        scanMode.addActionListener(event -> {
+            preferences.put(PluginPreferences.PREFIX + "scan.mode", selectedScanMode().name());
+            updateScanModeGuidance();
+        });
         add(scanMode);
         add(Box.createVerticalStrut(5));
+        updateScanModeGuidance();
+        add(scanModeGuidance);
+        add(Box.createVerticalStrut(6));
         scanButton.setAlignmentX(Component.LEFT_ALIGNMENT);
         scanButton.setEnabled(false);
         scanButton.setToolTipText(tr(
@@ -263,6 +269,23 @@ final class TaskReconnaissancePanel extends JPanel {
         return selected instanceof BuildingCandidateScanner.ScanMode
                 ? (BuildingCandidateScanner.ScanMode) selected
                 : BuildingCandidateScanner.ScanMode.CONSERVATIVE;
+    }
+
+    private void updateScanModeGuidance() {
+        BuildingCandidateScanner.ScanMode mode = selectedScanMode();
+        scanModeGuidance.setText(wrappingHtml(scanModeGuidance(mode)));
+        scanModeGuidance.setForeground(mode == BuildingCandidateScanner.ScanMode.EXPLORATORY
+                ? new Color(150, 65, 0) : new Color(45, 75, 95));
+    }
+
+    static String scanModeGuidance(BuildingCandidateScanner.ScanMode mode) {
+        if (mode == BuildingCandidateScanner.ScanMode.BALANCED) {
+            return "Recommended for most tasks. Shows a moderate number of reasonably supported possibilities.";
+        }
+        if (mode == BuildingCandidateScanner.ScanMode.EXPLORATORY) {
+            return "Includes weaker, uncertain candidates. Expect more non-buildings and review every candidate carefully. A highlight does not confirm that a building exists.";
+        }
+        return "Shows the fewest, strongest candidates. Best for avoiding obvious non-buildings, but subtle buildings may be missed.";
     }
 
     private void rescanAfterReview() {
@@ -1540,10 +1563,13 @@ final class TaskReconnaissancePanel extends JPanel {
     }
 
     private static JLabel wrappingLabel(String text) {
-        JLabel label = new JLabel("<html><div style='width:300px'>" + escapeHtml(text)
-                + "</div></html>");
+        JLabel label = new JLabel(wrappingHtml(text));
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
+    }
+
+    private static String wrappingHtml(String text) {
+        return "<html><div style='width:300px'>" + escapeHtml(text) + "</div></html>";
     }
 
     private GeometryEditControls createGeometryEditControls() {

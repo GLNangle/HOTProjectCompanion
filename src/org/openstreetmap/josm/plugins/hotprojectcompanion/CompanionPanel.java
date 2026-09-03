@@ -97,6 +97,14 @@ public final class CompanionPanel extends ToggleDialog {
         content.add(intro);
         content.add(Box.createVerticalStrut(6));
 
+        DetachTipPanel detachTip = new DetachTipPanel();
+        detachTip.setMaximumSize(new Dimension(Integer.MAX_VALUE,
+                detachTip.getPreferredSize().height));
+        content.add(detachTip);
+        if (detachTip.isVisible()) {
+            content.add(Box.createVerticalStrut(6));
+        }
+
         JButton detect = SidebarButtons.create(tr("Detect current task"));
         detect.setAlignmentX(Component.LEFT_ALIGNMENT);
         detect.addActionListener(event -> detectCurrentTask());

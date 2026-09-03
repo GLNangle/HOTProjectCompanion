@@ -564,7 +564,7 @@ final class BuildingCandidateScanner {
     enum ScanMode {
         CONSERVATIVE("Conservative", 68, 66, 8,
                 0.65, 0.28, 0.31, 0.34, 0.40, 0.55, 0.57, 0.25),
-        BALANCED("Balanced", 61, 60, 12,
+        BALANCED("Balanced (Recommended)", 61, 60, 12,
                 0.60, 0.22, 0.28, 0.26, 0.34, 0.46, 0.50, 0.24),
         EXPLORATORY("Exploratory", 52, 49, 18,
                 0.52, 0.14, 0.20, 0.14, 0.24, 0.34, 0.38, 0.16);

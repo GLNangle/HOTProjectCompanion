@@ -8,9 +8,10 @@ Project page: https://github.com/GLNangle/HOTProjectCompanion
 
 ## Current release
 
-Version 1.0.7 provides:
+Version 1.0.9 provides:
 
 - a dockable **HOT Project Companion** sidebar in JOSM with independently collapsible sections whose states persist across restarts;
+- a dismissible first-use tip explaining that JOSM's pin icon can detach the companion into a separate, resizable window;
 - automatic project and task detection from the JOSM task-boundary layer;
 - separate project and task fields as a manual fallback, with no URL required;
 - live read-only project instructions and per-task instructions;
@@ -31,8 +32,9 @@ Version 1.0.7 provides:
 - read-only **Task building reconnaissance** inside the detected HOT boundary;
 - separate **Scan entire task** and **Scan visible area** actions, with partial-scan counts limited
   to the displayed part of the task boundary;
-- persistent **Conservative**, **Balanced** and **Exploratory** sensitivity modes, with Conservative
-  as the default for the shortest and strongest review list;
+- persistent **Conservative**, **Balanced (Recommended)** and **Exploratory** sensitivity modes,
+  with concise in-plugin guidance about each mode and an explicit warning that Exploratory will
+  include more non-buildings;
 - a short explanation of the boundary, shadow, texture and contrast evidence that caused each
   candidate to be shown;
 - **Rescan after review**, which returns to the previous scan extent and excludes locations already
@@ -264,6 +266,14 @@ Version 1.0.7 preserves and restores the exact caret position during that automa
 This prevents macOS from selecting the question text after JOSM returns focus and stops the next
 character from overwriting what the mapper has already typed.
 
+Version 1.0.8 adds a dismissible first-use tip explaining that JOSM's pin icon can detach the
+companion into a separate, resizable window when the mapper needs more map space. The dismissal is
+remembered in JOSM preferences.
+
+Version 1.0.9 adds guidance beneath the reconnaissance sensitivity selector. It explains the
+trade-off for every mode, marks Balanced as recommended for most tasks and warns that Exploratory
+deliberately includes weaker candidates, so more non-buildings should be expected.
+
 ## Building check
 
 Load a HOT task, show only its authorised imagery, select exactly one complete closed outline and keep the whole outline visible. Press **Analyse selected outline**. JOSM captures the visible area, performs the measurements locally and displays the result without requiring a questionnaire.
@@ -299,10 +309,13 @@ whose centres fall within that subsection. Its candidate list and mapped counts 
 explicitly partial rather than totals for the whole task. Both modes temporarily capture only the
 visible authorised imagery and propose roof-like regions for review.
 
-Choose a sensitivity before scanning. **Conservative** is recommended for new mappers and shows no
-more than eight of the strongest candidates. **Balanced** allows up to twelve moderately supported
-possibilities. **Exploratory** allows up to eighteen weaker possibilities and is intended for careful
-experienced review rather than routine mapping. The selected mode is stored in JOSM preferences.
+Choose a sensitivity before scanning. **Conservative** shows no more than eight of the strongest
+candidates and reduces false detections, but can miss subtle buildings. **Balanced (Recommended)**
+allows up to twelve moderately supported possibilities and is suitable for most tasks.
+**Exploratory** allows up to eighteen weaker, uncertain possibilities, so mappers should expect more
+non-buildings and review every candidate carefully. A highlight never confirms that a building
+exists. The selected mode is stored in JOSM preferences, and the trade-off for the selected mode is
+shown directly beneath the selector.
 
 Mapped footprints are classified as rectangular/orthogonal, round or other using their tags and geometry. Possible unmapped candidates are found using local measurements of roof consistency, contrast, image boundaries, directional shadow and whether those signals form a rectangular or circular region. Candidates overlapping mapped building footprints are removed, and overlapping detections are merged.
 

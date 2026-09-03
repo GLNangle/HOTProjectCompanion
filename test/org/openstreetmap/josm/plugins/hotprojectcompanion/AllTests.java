@@ -15,6 +15,7 @@ public final class AllTests {
         SplitFeedbackCacheTest.main(args);
         MapCaptureTest.main(args);
         CollapsibleSectionTest.main(args);
+        DetachTipPanelTest.main(args);
         BuildingImageAnalyserTest.main(args);
         BuildingCandidateScannerTest.main(args);
         CandidateReviewNavigationTest.main(args);

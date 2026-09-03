@@ -23,6 +23,7 @@ public final class BuildingCandidateScannerTest {
         safelyAssessesOutlinesTouchingImageEdges();
         usesScaleAwareCandidateSizes();
         appliesSensitivityModesPredictably();
+        describesSensitivityModesClearly();
         excludesPreviouslyReviewedLocations();
         classifiesMappedFootprints();
         System.out.println("BuildingCandidateScannerTest: all tests passed");
@@ -65,6 +66,20 @@ public final class BuildingCandidateScannerTest {
             require(candidate.explanation() != null && !candidate.explanation().isEmpty(),
                     "retained candidates explain why they were shown");
         }
+    }
+
+    private static void describesSensitivityModesClearly() {
+        require(BuildingCandidateScanner.ScanMode.BALANCED.toString().contains("Recommended"),
+                "balanced mode is visibly recommended");
+        require(TaskReconnaissancePanel.scanModeGuidance(
+                BuildingCandidateScanner.ScanMode.CONSERVATIVE).contains("fewest"),
+                "conservative guidance explains the shorter review list");
+        String exploratory = TaskReconnaissancePanel.scanModeGuidance(
+                BuildingCandidateScanner.ScanMode.EXPLORATORY);
+        require(exploratory.contains("Expect more non-buildings"),
+                "exploratory guidance warns about false detections");
+        require(exploratory.contains("does not confirm"),
+                "exploratory guidance says that highlights are not verdicts");
     }
 
     private static void excludesPreviouslyReviewedLocations() {

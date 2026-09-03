@@ -34,7 +34,7 @@
                 <attribute name="Manifest-Version" value="1.0"/>
                 <attribute name="Plugin-Class" value="org.openstreetmap.josm.plugins.hotprojectcompanion.HotProjectCompanionPlugin"/>
                 <attribute name="Plugin-Description" value="Shows HOT project guidance and provides local building analysis with optional privacy-preserving shared learning."/>
-                <attribute name="Plugin-Version" value="1.0.7"/>
+                <attribute name="Plugin-Version" value="1.0.9"/>
                 <attribute name="Plugin-Mainversion" value="19613"/>
                 <attribute name="Plugin-Minimum-Java-Version" value="11"/>
                 <attribute name="Plugin-Icon" value="images/dialogs/hotprojectcompanion.svg"/>
